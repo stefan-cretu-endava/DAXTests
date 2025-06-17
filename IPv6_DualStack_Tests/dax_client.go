@@ -1,6 +1,9 @@
 package main
 
 import (
+	"net"
+	"time"
+
 	"github.com/aws/aws-dax-go-v2/dax"
 	"github.com/aws/aws-sdk-go-v2/aws"
 )
@@ -25,10 +28,10 @@ func getDaxClient(cfg *aws.Config, endpoint string, ipDiscovery string) (*dax.Da
 	// daxCfg.Config.MaxPendingConnectionsPerHost = int(appConfig.ClientConfig.MaxPendingConnections)
 	// daxCfg.Config.ClientHealthCheckInterval = time.Second * 5
 	// daxCfg.Config.ClusterUpdateInterval = time.Second * 5
-	// daxCfg.Config.DialContext = (&net.Dialer{
-	// 	Timeout:   time.Millisecond * time.Duration(appConfig.ClientConfig.ConnectionTimeout),
-	// 	KeepAlive: time.Minute,
-	// }).DialContext
+	daxCfg.Config.DialContext = (&net.Dialer{
+		Timeout:   time.Millisecond * time.Duration(5000),
+		KeepAlive: time.Minute,
+	}).DialContext
 
 	// The above created dax (service) Config is used to create a *Dax.
 	// Internally it requires a client instance, for which new is called using daxCfg.Config (client cluster Config).
