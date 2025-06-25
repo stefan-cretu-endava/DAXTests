@@ -5,10 +5,11 @@ import (
 	"time"
 
 	"github.com/aws/aws-dax-go-v2/dax"
+	"github.com/aws/aws-dax-go-v2/dax/utils"
 	"github.com/aws/aws-sdk-go-v2/aws"
 )
 
-func getDaxClient(cfg *aws.Config, endpoint string, ipDiscovery string) (*dax.Dax, error) {
+func getDaxClient(cfg *aws.Config, endpoint string, ipDiscovery utils.IpDiscovery) (*dax.Dax, error) {
 	if cfg == nil {
 		panic("Unable to get aws.Config")
 	}

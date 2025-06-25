@@ -3,16 +3,17 @@ package main
 import (
 	"fmt"
 
+	"github.com/aws/aws-dax-go-v2/dax/utils"
 	"github.com/aws/aws-sdk-go-v2/aws"
 )
 
-func createDaxClientWithIpDiscovery(awsConfig *aws.Config, endpointURL string, clusterType string, ipDiscovery string) {
-	fmt.Println("[Cluster type: " + clusterType + "] Creating dax client with ipDiscovery = " + ipDiscovery)
+func createDaxClientWithIpDiscovery(awsConfig *aws.Config, endpointURL string, clusterType string, ipDiscovery utils.IpDiscovery) {
+	fmt.Println("[Cluster type: " + clusterType + "] Creating dax client with ipDiscovery = " + ipDiscovery.String())
 	daxClient, err := getDaxClient(awsConfig, endpointURL, ipDiscovery)
 	if err != nil {
 		panic(err)
 	}
-	fmt.Println("[Cluster type: " + clusterType + "] Finished creating dax client with ipDiscovery = " + ipDiscovery)
+	fmt.Println("[Cluster type: " + clusterType + "] Finished creating dax client with ipDiscovery = " + ipDiscovery.String())
 	daxClient.Close()
 }
 
@@ -28,27 +29,27 @@ func main() {
 	// IPv4 cluster
 	func() {
 		fmt.Println("--------------------Start testing scenarios on IPv4 cluster-----------------------")
-		createDaxClientWithIpDiscovery(awsConfigUSEast1, ipv4USndpointURL, "IPv4", "IPv4")
-		createDaxClientWithIpDiscovery(awsConfigUSEast1, ipv4USndpointURL, "IPv4", "IPv6")
-		createDaxClientWithIpDiscovery(awsConfigUSEast1, ipv4USndpointURL, "IPv4", "")
+		createDaxClientWithIpDiscovery(awsConfigUSEast1, ipv4USndpointURL, "IPv4", utils.IpDiscoveryIPv4)
+		createDaxClientWithIpDiscovery(awsConfigUSEast1, ipv4USndpointURL, "IPv4", utils.IpDiscoveryIPv6)
+		createDaxClientWithIpDiscovery(awsConfigUSEast1, ipv4USndpointURL, "IPv4", utils.IpDiscoveryEmpty)
 		fmt.Println("--------------------Finished testing scenarios on IPv4 cluster-----------------------")
 	}()
 
 	// IPv6 cluster
 	func() {
 		fmt.Println("--------------------Start testing scenarios on IPv6 cluster-----------------------")
-		createDaxClientWithIpDiscovery(awsConfigUSEast1, ipv6EndpointURL, "IPv6", "IPv4")
-		createDaxClientWithIpDiscovery(awsConfigUSEast1, ipv6EndpointURL, "IPv6", "IPv6")
-		createDaxClientWithIpDiscovery(awsConfigUSEast1, ipv6EndpointURL, "IPv6", "")
+		createDaxClientWithIpDiscovery(awsConfigUSEast1, ipv6EndpointURL, "IPv6", utils.IpDiscoveryIPv4)
+		createDaxClientWithIpDiscovery(awsConfigUSEast1, ipv6EndpointURL, "IPv6", utils.IpDiscoveryIPv6)
+		createDaxClientWithIpDiscovery(awsConfigUSEast1, ipv6EndpointURL, "IPv6", utils.IpDiscoveryEmpty)
 		fmt.Println("--------------------Finished testing scenarios on IPv6 cluster-----------------------")
 	}()
 
 	//Dual stack
 	func() {
 		fmt.Println("--------------------Start testing scenarios on dual stack config-----------------------")
-		createDaxClientWithIpDiscovery(awsConfigUSEast1, dualStackEndpointURL, "Dual Stack (IPv4 + IPv6)", "IPv4")
-		createDaxClientWithIpDiscovery(awsConfigUSEast1, dualStackEndpointURL, "Dual Stack (IPv4 + IPv6)", "IPv6")
-		createDaxClientWithIpDiscovery(awsConfigUSEast1, dualStackEndpointURL, "Dual Stack (IPv4 + IPv6)", "")
+		createDaxClientWithIpDiscovery(awsConfigUSEast1, dualStackEndpointURL, "Dual Stack (IPv4 + IPv6)", utils.IpDiscoveryIPv4)
+		createDaxClientWithIpDiscovery(awsConfigUSEast1, dualStackEndpointURL, "Dual Stack (IPv4 + IPv6)", utils.IpDiscoveryIPv6)
+		createDaxClientWithIpDiscovery(awsConfigUSEast1, dualStackEndpointURL, "Dual Stack (IPv4 + IPv6)", utils.IpDiscoveryEmpty)
 		fmt.Println("--------------------Finished testing scenarios on dual stack config-----------------------")
 	}()
 }
