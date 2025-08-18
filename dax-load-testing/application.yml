@@ -1,0 +1,59 @@
+app:
+  number_of_clients: 1
+  number_of_threads_per_client: 100
+  initial_rps_per_thread: 0.1
+  final_rps_per_thread: 10
+  rps_ramping_factor: 0.001
+  rps_ramping_interval_ms: 50
+  dax-cluster-name: iulian-cluster
+  daxClusterRebootNodes:
+    enabled: false
+    initial-delay-ms: 1000
+    fixed-delay-ms: 600000
+  cloudwatch:
+    namespace: LoadTestApplication
+    push-frequency-minutes: 1
+  start-traffic: true
+  with-cache-miss: false
+  write-test: false
+  test-duration-minutes: 30
+
+spring.application.name: LoadTestApplication
+
+aws:
+  dynamodb:
+    table-name: IULIAN-DAX-Performance
+    create-table: true
+    load-data: true
+  dax:
+    endpoint: dax://iulian-cluster.cykcls.dax-clusters.eu-west-1.amazonaws.com
+    region: eu-west-1
+    maxPendingConnectionAcquires: 10
+    connectionTtlMillis: 1000
+    requestTimeoutMillis: 60000
+    maxConcurrency: 1000
+    writeRetries: 2
+    readRetries: 2
+    readRetriesAggressive: 3
+    writeRetriesAggressive: 3
+    requestTimeoutAggressiveMillis: 100
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health, metrics, info
+  metrics:
+    enable:
+      system: true
+    export:
+      cloudwatch:
+        enabled: true
+        namespace: IULIAN-ClientAPP
+        step: 1m
+        batch-size: 300
+
+logging:
+  level:
+    io.micrometer: DEBUG
+

@@ -1,0 +1,46 @@
+app:
+  number_of_clients: 100
+  number_of_threads_per_client: 100
+  initial_rps_per_thread: 0.1
+  final_rps_per_thread: 10
+  rps_ramping_factor: 0.001
+  rps_ramping_interval_ms: 50
+  daxClusterRebootNodes:
+    enabled: false
+    durationFrequency: 10m
+
+spring.application.name: PerfTestInstance.1
+aws:
+  dynamodb:
+    table-name: IULIAN-DAX-Performance
+    create-table: false
+
+  dax:
+    endpoint: dax://iulian-cluster.cykcls.dax-clusters.eu-west-1.amazonaws.com
+    region: eu-west-1
+    maxPendingConnectionAcquires: 10
+    connectionTtlMillis: 1000
+    requestTimeoutMillis: 100
+    maxConcurrency: 1000
+    writeRetries: 3
+    readRetries: 3
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health, metrics, info
+  metrics:
+    enable:
+      system: true
+    export:
+      cloudwatch:
+        enabled: true
+        namespace: IULIAN-ClientAPP
+        step: 1m
+        batch-size: 300
+
+logging:
+  level:
+    io.micrometer: DEBUG
+
