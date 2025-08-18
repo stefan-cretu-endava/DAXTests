@@ -1,5 +1,5 @@
 /*
-  Copyright 2018 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+  Copyright 2024 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 
   Licensed under the Apache License, Version 2.0 (the "License").
   You may not use this file except in compliance with the License.
@@ -18,15 +18,20 @@ package cbor
 import (
 	"bytes"
 	"context"
-	"errors"
 	"fmt"
 	"sort"
 
 	"github.com/aws/aws-dax-go-v2/dax/internal/lru"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
+	"github.com/aws/smithy-go"
 )
 
-var ErrMissingKey = errors.New("one of the required keys was not given a value")
+const ErrCodeValidationException = "ValidationException"
+
+var ErrMissingKey = &smithy.GenericAPIError{
+	Code:    ErrCodeValidationException,
+	Message: "one of the required keys was not given a value",
+}
 
 func EncodeItemKey(item map[string]types.AttributeValue, keydef []types.AttributeDefinition, writer *Writer) error {
 	keyBytes, err := GetEncodedItemKey(item, keydef)
@@ -38,7 +43,10 @@ func EncodeItemKey(item map[string]types.AttributeValue, keydef []types.Attribut
 
 func GetEncodedItemKey(item map[string]types.AttributeValue, keydef []types.AttributeDefinition) ([]byte, error) {
 	if item == nil {
-		return nil, errors.New("item cannot be nil")
+		return nil, &smithy.GenericAPIError{
+			Code:    ErrCodeValidationException,
+			Message: "item cannot be nil",
+		}
 	}
 
 	hk := keydef[0]
@@ -132,7 +140,10 @@ func GetEncodedItemKey(item map[string]types.AttributeValue, keydef []types.Attr
 			d := new(Decimal)
 			d, isExpectedType = d.SetString(n.Value)
 			if !isExpectedType {
-				return nil, errors.New("invalid number " + n.Value)
+				return nil, &smithy.GenericAPIError{
+					Code:    ErrCodeValidationException,
+					Message: "invalid number " + n.Value,
+				}
 			}
 			if _, err := EncodeLexDecimal(d, w.bw); err != nil {
 				return nil, err

@@ -1,5 +1,5 @@
 /*
-  Copyright 2018 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+  Copyright 2024 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 
   Licensed under the Apache License, Version 2.0 (the "License").
   You may not use this file except in compliance with the License.
@@ -47,9 +47,7 @@ type Config struct {
 	RequestTimeout time.Duration
 	WriteRetries   int
 	ReadRetries    int
-	RetryMode      aws.RetryMode
 	RetryDelay     time.Duration
-	retryer        aws.Retryer
 
 	Logger   logging.Logger
 	LogLevel utils.LogLevelType
@@ -129,10 +127,6 @@ func (c *Config) mergeFrom(ac aws.Config, endpoint string) {
 		c.WriteRetries = r
 		c.ReadRetries = r
 	}
-	if ac.Logger != nil {
-		c.Logger = ac.Logger
-	}
-
 	if ac.Credentials != nil {
 		c.Credentials = ac.Credentials
 	}

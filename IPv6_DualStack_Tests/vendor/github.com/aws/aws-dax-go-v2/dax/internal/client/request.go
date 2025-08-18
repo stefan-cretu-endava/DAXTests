@@ -1,5 +1,5 @@
 /*
-  Copyright 2018 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+  Copyright 2024 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 
   Licensed under the Apache License, Version 2.0 (the "License").
   You may not use this file except in compliance with the License.
@@ -221,6 +221,9 @@ func encodePutItemInput(ctx context.Context, input *dynamodb.PutItemInput, keySc
 		return smithy.NewErrParamRequired("input cannot be nil")
 	}
 	var err error
+	if err = ValidateOpPutItemInput(input); err != nil {
+		return err
+	}
 	if input, err = translateLegacyPutItemInput(input); err != nil {
 		return err
 	}
@@ -257,6 +260,9 @@ func encodeDeleteItemInput(ctx context.Context, input *dynamodb.DeleteItemInput,
 		return smithy.NewErrParamRequired("input cannot be nil")
 	}
 	var err error
+	if err = ValidateOpDeleteItemInput(input); err != nil {
+		return err
+	}
 	if input, err = translateLegacyDeleteItemInput(input); err != nil {
 		return err
 	}
@@ -290,6 +296,9 @@ func encodeUpdateItemInput(ctx context.Context, input *dynamodb.UpdateItemInput,
 		return smithy.NewErrParamRequired("input cannot be nil")
 	}
 	var err error
+	if err = ValidateOpUpdateItemInput(input); err != nil {
+		return err
+	}
 	if input, err = translateLegacyUpdateItemInput(input); err != nil {
 		return err
 	}
@@ -323,6 +332,9 @@ func encodeGetItemInput(ctx context.Context, input *dynamodb.GetItemInput, keySc
 		return smithy.NewErrParamRequired("input cannot be nil")
 	}
 	var err error
+	if err = ValidateOpGetItemInput(input); err != nil {
+		return err
+	}
 	if input, err = translateLegacyGetItemInput(input); err != nil {
 		return err
 	}
@@ -354,6 +366,9 @@ func encodeScanInput(ctx context.Context, input *dynamodb.ScanInput, keySchema *
 		return smithy.NewErrParamRequired("input cannot be nil")
 	}
 	var err error
+	if err = ValidateOpScanInput(input); err != nil {
+		return err
+	}
 	if input, err = translateLegacyScanInput(input); err != nil {
 		return err
 	}
@@ -381,6 +396,9 @@ func encodeQueryInput(ctx context.Context, input *dynamodb.QueryInput, keySchema
 		return smithy.NewErrParamRequired("input cannot be nil")
 	}
 	var err error
+	if err = ValidateOpQueryInput(input); err != nil {
+		return err
+	}
 	if input, err = translateLegacyQueryInput(input); err != nil {
 		return err
 	}
@@ -414,6 +432,9 @@ func encodeBatchWriteItemInput(ctx context.Context, input *dynamodb.BatchWriteIt
 		return smithy.NewErrParamRequired("input cannot be nil")
 	}
 	var err error
+	if err = ValidateOpBatchWriteItemInput(input); err != nil {
+		return err
+	}
 	if err = encodeServiceAndMethod(batchWriteItem_116217951_1_Id, writer); err != nil {
 		return err
 	}
@@ -489,6 +510,9 @@ func encodeBatchGetItemInput(ctx context.Context, input *dynamodb.BatchGetItemIn
 		return smithy.NewErrParamRequired("input cannot be nil")
 	}
 	var err error
+	if err = ValidateOpBatchGetItemInput(input); err != nil {
+		return err
+	}
 	if input, err = translateLegacyBatchGetItemInput(input); err != nil {
 		return err
 	}
@@ -572,7 +596,9 @@ func encodeTransactWriteItemsInput(
 		return smithy.NewErrParamRequired("input cannot be nil")
 	}
 	var err error
-
+	if err = ValidateOpTransactWriteItemsInput(input); err != nil {
+		return err
+	}
 	if err = encodeServiceAndMethod(transactWriteItems_N1160037738_1_Id, writer); err != nil {
 		return err
 	}
@@ -839,7 +865,9 @@ func encodeTransactGetItemsInput(
 		return smithy.NewErrParamRequired("input cannot be nil")
 	}
 	var err error
-
+	if err = ValidateOpTransactGetItemsInput(input); err != nil {
+		return err
+	}
 	if err = encodeServiceAndMethod(transactGetItems_1866287579_1_Id, writer); err != nil {
 		return err
 	}

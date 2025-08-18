@@ -1,5 +1,5 @@
 /*
-  Copyright 2018 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+  Copyright 2024 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 
   Licensed under the Apache License, Version 2.0 (the "License").
   You may not use this file except in compliance with the License.
@@ -30,6 +30,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/aws/aws-dax-go-v2/dax/types"
 	"github.com/aws/aws-dax-go-v2/dax/utils"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
@@ -75,7 +76,7 @@ type Config struct {
 	logLevel                 utils.LogLevelType
 
 	RouteManagerEnabled bool // this flag temporarily removes routes facing network errors.
-	IpDiscovery         string
+	IpDiscovery         types.IpDiscovery
 }
 
 type connConfig struct {
@@ -96,6 +97,9 @@ func (cfg *Config) validate() error {
 	}
 	if cfg.MaxPendingConnectionsPerHost < 0 {
 		return NewCustomInvalidParamError("ConfigValidation", "MaxPendingConnectionsPerHost cannot be negative")
+	}
+	if !cfg.IpDiscovery.IsValid() {
+		return smithy.NewErrParamRequired("config.IpDiscovery must be 'ipv4' or 'ipv6'")
 	}
 	return nil
 }
@@ -372,7 +376,7 @@ type cluster struct {
 	seeds         []hostPort
 	config        Config
 	clientBuilder clientBuilder
-	IpDiscovery   string
+	IpDiscovery   types.IpDiscovery
 }
 
 type clientAndConfig struct {
@@ -570,7 +574,7 @@ func (c *cluster) refreshNow() error {
 }
 
 // This method is responsible for updating the set of active routes tracked by
-// the clsuter-dax-client in response to updates in the roster.
+// the cluster-dax-client in response to updates in the roster.
 func (c *cluster) update(config []serviceEndpoint) error {
 	newEndpoints := make(map[hostPort]struct{}, len(config))
 	for _, cfg := range config {
@@ -689,94 +693,92 @@ func (c *cluster) hasChanged(cfg []serviceEndpoint) bool {
 	return len(cfg) != len(c.active)
 }
 
-/*
-* Given a slice of IPs obtained after resolving a seed's address, separate it into 2 slices, one containing
-* only IPv4 addresses, the other containing only IPv6 addresses. Later, both slices can be used to determine
-* if the current seed supports dual stack (if both slices are not empty).
-* Function not implemented on any struct, so it can be reused in more contexts.
-* */
-func SegregateIPsAssociatedWithSeed(ips []net.IP) (ipv4Addresses []net.IP, ipv6Addresses []net.IP) {
-	for _, ip := range ips {
-		// A seggregation based entirely on IP's length cannot be done, as IPv4 can use 16-byte representation, like IPv6
+// splitIpAddressesByVersion takes as input a slice of ips or endpoints and separates it into 2 slices:
+// one containing only ipv4 addresses, the other containing only ipv6 addresses, which are returned
+// In case of failure, both returned slices are nil, alongisde an appropriate error message.
+func splitIpAddressesByVersion[T net.IP | serviceEndpoint](items []T) (ipv4 []T, ipv6 []T, err error) {
+	for _, item := range items {
+		var ip net.IP
+
+		switch itemCastedToType := any(item).(type) {
+		case net.IP:
+			ip = itemCastedToType
+		case serviceEndpoint:
+			ip = net.IP(itemCastedToType.address)
+		default:
+			err = errors.New("cannot split addresses: input list has unsupported type")
+			return nil, nil, err
+		}
+
 		if len(ip) == net.IPv4len || len(ip) == net.IPv6len {
-			// To4() returns a non-nil value if the IP is IPv4. If nil is returned and IP isn't nil, then it is IPv6
 			if ip.To4() != nil {
-				ipv4Addresses = append(ipv4Addresses, ip)
+				ipv4 = append(ipv4, item)
 			} else {
-				ipv6Addresses = append(ipv6Addresses, ip)
+				ipv6 = append(ipv6, item)
 			}
+		} else {
+			err = fmt.Errorf("cannot split addresses: invalid IP length of address: %s", ip.String())
+			return nil, nil, err
 		}
 	}
-
-	return ipv4Addresses, ipv6Addresses
+	return
 }
 
-/*
-* Check the configuration (IPv4/IPv6/Dual stack) of a given seed in cluster, based on the discovered IP addresses.
-* Use the found configuration in conjunction with the user provided IpDiscovery to decide which ip set will be used
-* to pull the endpoint from.
-* Return a slice containing the appropriate IP addresses to be used, or an empty slice otherwise.
-* */
-func (c *cluster) handleDualStackScenarios(seedIPs []net.IP) (selectedIPs []net.IP) {
-
-	c.debugLog("[handleDualStackScenarios] Segregating a IP list of current seed counting: " + strconv.Itoa(len(seedIPs)))
-	// Seggregate IPv4 and IPv6 addresses of the current seed node, to determine if it is configured dual stack mode
-	ipv4Addresses, ipv6Addresses := SegregateIPsAssociatedWithSeed(seedIPs)
-	c.debugLog("[handleDualStackScenarios] Segregated IPv4 list size: " + strconv.Itoa(len(ipv4Addresses)) + " IPv6 list size: " + strconv.Itoa(len(ipv6Addresses)))
+// selectAddressType checks the configuration (ipv4/ipv6/Dual stack) of a given seed in cluster, based on the discovered IP addresses.
+// Uses the found configuration in conjunction with the user provided IpDiscovery to return the ip set that will be used.
+// In case of cluster config-ipDiscovery missmatch, nil slice is returned, with an appropriate error.
+func selectAddressType[T net.IP | serviceEndpoint](ipv4Addresses []T, ipv6Addresses []T, userProvidedIpDiscovery types.IpDiscovery) ([]T, error) {
 
 	// Determine the supported network type based on the discovered addresses
-	isIPv4Seed := len(ipv4Addresses) > 0
-	isIPv6Seed := len(ipv6Addresses) > 0
+	hasIPv4 := len(ipv4Addresses) > 0
+	hasIPv6 := len(ipv6Addresses) > 0
 
-	/*
-	* Implementation of IPv6 DAX feature involves determining the addresses type: IPv4, IPv6, dual stack.
-	* This process always occurs after the resolution of endpoints' ip addresses.
-	* Dual stack => an endpoint supports both IPv4 and IPv6, thus entails checking multiple IPs for determining it's usage
-	* */
-	isDualStackSeed := isIPv4Seed && isIPv6Seed
-	shallIPv4BeUsed := false
-	shallIPv6BeUsed := false
-
-	// Check the optional IpDiscovery client-provided parameter which indicates the DAX client's IP type preference for connection
-	if isDualStackSeed {
-		if strings.EqualFold(c.IpDiscovery, "ipv4") || c.IpDiscovery == "" {
-			// Use IPv4 connection if local DNS determined a dual stack config and the client opted for IPv4 or has no option
-			shallIPv4BeUsed = true
-			c.debugLog("[handleDualStackScenarios] dual stack configuration with IpDiscovery = " + c.IpDiscovery)
-		} else if strings.EqualFold(c.IpDiscovery, "ipv6") {
-			// Use IPv6 connection if local DNS determined a dual stack config and the client opted for IPv6
-			shallIPv6BeUsed = true
-			c.debugLog("[handleDualStackScenarios] dual stack configuration with ipv6 IpDiscovery = " + c.IpDiscovery)
-		}
-	} else if isIPv4Seed && !isIPv6Seed {
-		if strings.EqualFold(c.IpDiscovery, "ipv4") || c.IpDiscovery == "" {
-			// Use IPv4 connection if local DNS determined a IPv4 config and the client opted for IPv4 or has no option
-			shallIPv4BeUsed = true
-			c.debugLog("[handleDualStackScenarios] IPv4 configuration with IpDiscovery = " + c.IpDiscovery)
-		} else if strings.EqualFold(c.IpDiscovery, "ipv6") {
-			c.debugLog("IpDiscovery does not match the supported network type. IpDiscovery: ipv6, SupportedNetworkType: ipv4")
-		}
-	} else if !isIPv4Seed && isIPv6Seed {
-		if strings.EqualFold(c.IpDiscovery, "ipv6") || c.IpDiscovery == "" {
-			// Use IPv6 connection if local DNS determined a IPv6 config and the client opted for IPv6 or has no option
-			shallIPv6BeUsed = true
-			c.debugLog("[handleDualStackScenarios] IPv6 configuration with IpDiscovery = " + c.IpDiscovery)
-		} else if strings.EqualFold(c.IpDiscovery, "ipv4") {
-			c.debugLog("IpDiscovery does not match the supported network type. IpDiscovery: ipv4, SupportedNetworkType: ipv6")
-		}
+	apiErr := smithy.GenericAPIError{
+		Code:  ErrCodeValidationException,
+		Fault: smithy.FaultClient,
 	}
 
-	if shallIPv4BeUsed {
-		c.debugLog("[handleDualStackScenarios] Use IPv4 ips based on the found config and provided IpDiscovery = " + c.IpDiscovery)
-		return ipv4Addresses
-	} else if shallIPv6BeUsed {
-		c.debugLog("[handleDualStackScenarios] Use IPv6 ips based on the found config and provided IpDiscovery = " + c.IpDiscovery)
-		return ipv6Addresses
+	currentIpDiscovery := strings.ToLower(userProvidedIpDiscovery.String())
+	switch currentIpDiscovery {
+	case "":
+		if hasIPv4 {
+			return ipv4Addresses, nil
+		} else if hasIPv6 {
+			return ipv6Addresses, nil
+		}
+	case types.IpDiscoveryIPv4.String():
+		if !hasIPv4 {
+			apiErr.Message = fmt.Sprintf("ipDiscovery %s does not match the SupportedNetworkType %s.", currentIpDiscovery, types.IpDiscoveryIPv6)
+			return nil, &apiErr
+		}
+		return ipv4Addresses, nil
+	case types.IpDiscoveryIPv6.String():
+		if !hasIPv6 {
+			apiErr.Message = fmt.Sprintf("ipDiscovery %s does not match the SupportedNetworkType %s.", currentIpDiscovery, types.IpDiscoveryIPv4)
+			return nil, &apiErr
+		}
+		return ipv6Addresses, nil
 	}
 
-	c.debugLog("[handleDualStackScenarios] No endpoints are available based on the found config and provided IpDiscovery = " + c.IpDiscovery)
-	// return empty list
-	return
+	apiErr.Message = fmt.Sprintf("invalid IP discovery type: %s", currentIpDiscovery)
+	return nil, &apiErr
+}
+
+// filterAndSelectAddress takes as input a slice of IPs.s.
+// Firstly, it separates the list of available addresses into 2 slices containing only ipv4 and ipv6 addresses, respectively.
+// Based on these lists, it infers the configuration (ipv4/ipv6/Dual stack) of the given nodes in cluster.
+// Finally, it uses the found config type, in conjunction with the user provided IpDiscovery, for
+// deciding which ip set will be used, hence being returned.
+// In case of missmatch cluster config - ipDiscovery, an appropriate error message is returned, alongisde nil slice.
+func filterAndSelectAddress[T net.IP | serviceEndpoint](ipAddresses []T, userProvidedIpDiscovery types.IpDiscovery) ([]T, error) {
+	// Split the seed's ips in 2 separate lists, based on IP type
+	ipv4Addresses, ipv6Addresses, err := splitIpAddressesByVersion(ipAddresses)
+
+	if err != nil {
+		return nil, err
+	}
+
+	return selectAddressType(ipv4Addresses, ipv6Addresses, userProvidedIpDiscovery)
 }
 
 func (c *cluster) pullEndpoints() ([]serviceEndpoint, error) {
@@ -784,46 +786,40 @@ func (c *cluster) pullEndpoints() ([]serviceEndpoint, error) {
 	// Multiple seeds (known nodes with public address) are used as entry points for a given cluster, to handle fault tolerance
 	for _, s := range c.seeds {
 		// Address resolution: determine the IP addresses assigned to each known seed hostname.
-		// A seed hostname can resolve to multiple IPs, both IPv4 and IPv6
-		seedIPs, err := net.LookupIP(s.host)
+		// A seed hostname can resolve to multiple IPs, both ipv4 and ipv6
+		ips, err := net.LookupIP(s.host)
 		if err != nil {
 			lastErr = err
 			continue
 		}
 
-		if len(seedIPs) > 1 {
+		if len(ips) > 1 {
 			// randomize multiple addresses; in-place fischer-yates shuffle.
-			for idx := len(seedIPs) - 1; idx > 0; idx-- {
-				shuffleIndex := rand.Intn(idx + 1)
-				seedIPs[shuffleIndex], seedIPs[idx] = seedIPs[idx], seedIPs[shuffleIndex]
+			for j := len(ips) - 1; j > 0; j-- {
+				k := rand.Intn(j + 1)
+				ips[k], ips[j] = ips[j], ips[k]
 			}
 		}
 
-		c.debugLog("[pullEndpoints] Selecting available IPs for seed = " + s.host + strconv.Itoa(s.port))
-		selectedIPsForCurrentSeed := c.handleDualStackScenarios(seedIPs)
-		c.debugLog("[pullEndpoints] Available IPs for seed = " + s.host + strconv.Itoa(s.port) + " were selected")
-
-		if len(selectedIPsForCurrentSeed) == 0 {
-			c.debugLog("[pullEndpoints] NoRouteException: No endpoints available for seed = " + s.host + strconv.Itoa(s.port))
-			lastErr = errors.New("NoRouteException: No endpoints available")
-			//To determine if the code should continue from here or shall return like below ???
-
-			return nil, &smithy.GenericAPIError{
-				Code:    ErrCodeNoRouteException,
-				Message: fmt.Sprintf("No endpoints available"),
-				Fault:   smithy.FaultClient,
-			}
+		// filter the current seed's ip addresses based on user provided IpDiscovery
+		filteredIPsForCurrentSeed, apiErr := filterAndSelectAddress(ips, c.IpDiscovery)
+		if apiErr != nil {
+			c.debugLog("Failed to filter IPs for seed %s:%d with discovery mode %s: %v", s.host, s.port, c.IpDiscovery.String(), apiErr)
+			return nil, apiErr
 		}
 
-		for _, ip := range selectedIPsForCurrentSeed {
+		for _, ip := range filteredIPsForCurrentSeed {
 			endpoints, err := c.pullEndpointsFrom(ip, s.port)
 			if err != nil {
+				c.debugLog("Failed to pull endpoint from ip: " + ip.String() + " port: " + strconv.Itoa(s.port))
 				lastErr = err
 				continue
 			}
+
 			c.debugLog("Pulled endpoints from %s : %v", ip, endpoints)
 			if len(endpoints) > 0 {
-				return endpoints, nil
+				// filter the endpoint's ip addresses based on user provided IpDiscovery
+				return filterAndSelectAddress(endpoints, c.IpDiscovery)
 			}
 		}
 	}
@@ -891,7 +887,7 @@ type clientBuilder interface {
 type singleClientBuilder struct{}
 
 func (*singleClientBuilder) newClient(ip net.IP, port int, connConfigData connConfig, region string, credentials aws.CredentialsProvider, maxPendingConnects int, dialContextFn dialContext, routeListener RouteListener) (DaxAPI, error) {
-	endpoint := fmt.Sprintf("%s:%d", ip, port)
+	endpoint := net.JoinHostPort(ip.String(), strconv.Itoa(port))
 	return newSingleClientWithOptions(endpoint, connConfigData, region, credentials, maxPendingConnects, dialContextFn, routeListener)
 }
 
