@@ -21,7 +21,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"net"
 	"strings"
 
@@ -67,7 +66,6 @@ type daxTransactionCanceledFailure struct {
 }
 
 func newDaxRequestFailure(codes []int, errorCode, message, requestId string, statusCode int, fault smithy.ErrorFault) *daxRequestFailure {
-	log.Println("[newDaxRequestFailure]: statusCode:", statusCode, " requestId:", requestId)
 	return &daxRequestFailure{
 		GenericAPIError: &smithy.GenericAPIError{
 			Code:    errorCode,
@@ -82,9 +80,6 @@ func newDaxRequestFailure(codes []int, errorCode, message, requestId string, sta
 
 func newDaxTransactionCanceledFailure(codes []int, errorCode, message, requestId string, statusCode int,
 	cancellationReasonCodes, cancellationReasonMsgs []*string, cancellationReasonItems []byte) *daxTransactionCanceledFailure {
-
-	log.Println("[newDaxRequestFailure]: statusCode:", statusCode, " requestId:", requestId)
-
 	return &daxTransactionCanceledFailure{
 		daxRequestFailure:       newDaxRequestFailure(codes, errorCode, message, requestId, statusCode, smithy.FaultServer), // Transaction cancellation errors are server-side errors
 		cancellationReasonCodes: cancellationReasonCodes,
@@ -128,7 +123,6 @@ func translateError(err error) smithy.APIError {
 		if e.Timeout() {
 			code = ErrCodeResponseTimeout
 		}
-		log.Println("[newDaxRequestFailure]: statusCode:", 400, " requestId:", "")
 		return newDaxRequestFailure(
 			[]int{2}, // Code 2 indicates recoverable failure
 			code,
@@ -138,7 +132,6 @@ func translateError(err error) smithy.APIError {
 			smithy.FaultClient,
 		)
 	default:
-		log.Println("[newDaxRequestFailure]: statusCode:", 400, " requestId:", "")
 		// For unknown errors
 		return newDaxRequestFailure(
 			[]int{0}, // Code 0 indicates unretryable server error
@@ -277,7 +270,6 @@ func decodeError(reader *cbor.Reader) (error, error) {
 		return newDaxTransactionCanceledFailure(codes, errorCode, msg, requestId, statusCode,
 			cancellationReasonCodes, cancellationReasonMsgs, cancellationReasonItems), nil
 	}
-	log.Println("[newDaxRequestFailure]: statusCode:", statusCode, " requestId:", requestId)
 	return newDaxRequestFailure(codes, errorCode, msg, requestId, statusCode, smithy.FaultServer), nil
 }
 

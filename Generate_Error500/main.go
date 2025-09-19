@@ -15,6 +15,7 @@ import (
 	awshttp "github.com/aws/aws-sdk-go-v2/aws/transport/http"
 	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 )
 
 const (
@@ -92,6 +93,29 @@ func putItem(daxClient *dax.Dax) {
 	// }
 }
 
+func GetItemWithShortContext(daxClient *dax.Dax) {
+	// Create a context with an extremely short timeout
+	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Millisecond)
+	defer cancel()
+
+	input := &dynamodb.GetItemInput{
+		TableName: aws.String("your_valid_table_name"),
+		Key: map[string]types.AttributeValue{
+			"id": &types.AttributeValueMemberS{Value: "123"},
+		},
+	}
+
+	_, err := daxClient.GetItem(ctx, input)
+	if err != nil {
+		var re *awshttp.ResponseError
+		if errors.As(err, &re) {
+			log.Printf("requestID: %s, error: %v", re.ServiceRequestID(), re.Unwrap())
+		}
+	} else {
+		fmt.Println("GetItem succeeded unexpectedly")
+	}
+}
+
 func main() {
 	reboot := flag.Bool("reboot", false, "Enable cluster reboot")
 	flag.Parse()
@@ -129,6 +153,8 @@ func main() {
 		putItem(daxClient)
 		//time.Sleep(time.Duration(attempt) * time.Second) // Optional backoff
 	}
+
+	//GetItemWithShortContext(daxClient)
 
 	daxClient.Close()
 }

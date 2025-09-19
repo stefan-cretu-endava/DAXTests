@@ -186,7 +186,6 @@ func (cc *ClusterDaxClient) PutItemWithOptions(ctx context.Context, input *dynam
 		output, err = client.PutItemWithOptions(ctx, input, output, o)
 		return err
 	}
-	opt.Logger.Logf(logging.Debug, "[Test] Retrying Request %s for PutItemWithOptions", service)
 	if err = cc.retry(ctx, OpPutItem, action, opt); err != nil {
 		return output, err
 	}
@@ -319,7 +318,6 @@ func (cc *ClusterDaxClient) retry(ctx context.Context, op string, action func(cl
 		if i > 0 && opt.Logger != nil && opt.LogLevel.Matches(utils.LogDebugWithRequestRetries) {
 			opt.Logger.Logf(logging.Debug, "Retrying Request %s/%s, attempt %d", service, op, i)
 		}
-		opt.Logger.Logf(logging.Debug, "[Test] Retrying Request %s for operation %s", service, op)
 		client, err = cc.cluster.client(client, op)
 
 		if err == nil {
