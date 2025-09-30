@@ -23,9 +23,9 @@ const (
 	ipv4EUEndpointURL    string = "dax://csc-cluster.cykcls.dax-clusters.eu-west-1.amazonaws.com"
 	ipv4EndpointURL      string = "dax://csc-ipv4-ubuntu.6lzwui.alpha-dax-clusters.us-east-1.amazonaws.com" //3 nodes, r5.large
 	ipv6EndpointURL      string = "dax://csc-ipv6.6lzwui.alpha-dax-clusters.us-east-1.amazonaws.com"        //1 node, r5.large
-	dualStackEndpointURL string = "dax://csc-dualstack.6lzwui.alpha-dax-clusters.us-east-1.amazonaws.com"   //3 nodes, r5.large
+	dualStackEndpointURL string = "dax://csc-dualstack.6lzwui.alpha-dax-clusters.us-east-1.amazonaws.com"   //2 nodes, r5.large
 	//TLS, port 9111
-	ipv4TLSEndpointURL      string = "daxs://csc-tls-ipv4.6lzwui.alpha-dax-clusters.us-east-1.amazonaws.com"      //1 node, r7i.24xlarge
+	ipv4TLSEndpointURL      string = "daxs://csc-tls-ipv4.6lzwui.alpha-dax-clusters.us-east-1.amazonaws.com"      //3 node, r7i.24xlarge
 	dualStackTLSEndpointURL string = "daxs://csc-tls-dualstack.6lzwui.alpha-dax-clusters.us-east-1.amazonaws.com" //1 node, r7i.24xlarge
 
 	tableName string = "CSC-DAX-Performance"
@@ -87,7 +87,7 @@ func GetItemWithId(daxClient *dax.Dax, ctx context.Context, id uint) {
 		},
 	}
 
-	item, err := daxClient.GetItem(ctx, input)
+	_, err := daxClient.GetItem(ctx, input)
 	if err != nil {
 		var re *awshttp.ResponseError
 		if errors.As(err, &re) {
@@ -96,53 +96,70 @@ func GetItemWithId(daxClient *dax.Dax, ctx context.Context, id uint) {
 			fmt.Println("[GetItemWithId] err:", err)
 		}
 	} else {
-		fmt.Println("[GetItemWithId] GetItem succeeded:", id, item)
+		fmt.Println("[GetItemWithId] GetItem succeeded:", id)
 	}
 }
 
 func main() {
 	useTLS := flag.Bool("useTLS", false, "Enable usaing TLS cluster")
+	requestsNo := flag.Uint("requestsNo", 50, "# of goroutines")
 	flag.Parse()
 
 	awsConfigUSEast1 := getAwsConfig(region)
-	const requestsNo uint = 30
 	wg := sync.WaitGroup{}
 
 	if *useTLS {
-		daxClientTLS, _ := getSecureDAXClientForTLS(awsConfigUSEast1, dualStackTLSEndpointURL)
+		daxClientTLS, _ := getSecureDAXClientForTLS(awsConfigUSEast1, ipv4TLSEndpointURL)
 		putItem(daxClientTLS)
-		ctxCancel, cancelFunc := context.WithTimeout(context.Background(), 10*time.Second)
 
-		fmt.Printf("Starting %d goroutines to GetItem on 1-node TLS cluster\n", requestsNo)
+		ctxCancel, cancelFunc := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancelFunc()
 
-		for idx := range requestsNo {
+		//use semaphore to allow max 20 concurrent goroutines
+		sem := make(chan struct{}, 20)
+
+		fmt.Printf("Starting %d goroutines to GetItem on 3-node TLS cluster\n", *requestsNo)
+
+		for idx := range *requestsNo {
 			wg.Add(1)
 			go func(idx uint) {
+				defer wg.Done()
+				sem <- struct{}{}
 				GetItemWithId(daxClientTLS, ctxCancel, idx)
-				wg.Done()
+				<-sem
 			}(idx)
 		}
 
 		wg.Wait()
-		fmt.Printf("Finished %d goroutines to GetItem on 1-node TLS cluster.Cancling context and closing client...\n", requestsNo)
-		cancelFunc()
+		fmt.Printf("Finished %d goroutines to GetItem on 3-node TLS cluster.Cancling context and closing client...\n", *requestsNo)
+
 		daxClientTLS.Close()
 	} else {
-		daxClient3Nodes, _ := getDaxClient(awsConfigUSEast1, dualStackEndpointURL)
+		daxClient3Nodes, _ := getDaxClient(awsConfigUSEast1, ipv4EndpointURL)
 		putItem(daxClient3Nodes)
-		fmt.Printf("Starting %d goroutines to GetItem on 3-node cluster\n", requestsNo)
-		for idx := range requestsNo {
+
+		ctxCancel, cancelFunc := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancelFunc()
+
+		//use semaphore to allow max 20 concurrent goroutines
+		//sem := make(chan struct{}, 20)
+
+		fmt.Printf("Starting %d goroutines to GetItem on 3-node cluster\n", *requestsNo)
+
+		for idx := range *requestsNo {
 			wg.Add(1)
 			go func(idx uint) {
-				ctxCancel, cancelFunc := context.WithTimeout(context.Background(), 30*time.Second)
+				defer wg.Done()
+				//acquire semaphore, by increasing count of sent empty objects
+				//sem <- struct{}{}
 				GetItemWithId(daxClient3Nodes, ctxCancel, idx)
-				wg.Done()
-				cancelFunc()
+				//release semaphore by reading written empty objects
+				//<-sem
 			}(idx)
 		}
 
 		wg.Wait()
-		fmt.Printf("Finished %d goroutines to GetItem on 3-node cluster. Cancelling context and closing the client...\n", requestsNo)
+		fmt.Printf("Finished %d goroutines to GetItem on 3-node cluster. Cancelling context and closing the client...\n", *requestsNo)
 
 		daxClient3Nodes.Close()
 	}

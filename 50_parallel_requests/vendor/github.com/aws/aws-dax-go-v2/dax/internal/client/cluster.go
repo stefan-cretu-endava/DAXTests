@@ -619,6 +619,7 @@ func (c *cluster) update(config []serviceEndpoint) error {
 				}
 
 				if singleCli, ok := cli.(HealthCheckDaxAPI); ok {
+					fmt.Println("[cluster::update] startHealthChecks. Debug stack:" /*string(debug.Stack())*/)
 					singleCli.startHealthChecks(c, ep.hostPort())
 				}
 			}
@@ -653,6 +654,7 @@ func (c *cluster) onHealthCheckFailed(host hostPort) {
 	if ok {
 		cli, err := c.newSingleClient(oldClientConfig.cfg)
 		if singleCli, ok := cli.(HealthCheckDaxAPI); ok {
+			fmt.Println("[cluster::onHealthCheckFailed] startHealthChecks. Debug stack:" /*string(debug.Stack())*/)
 			singleCli.startHealthChecks(c, host)
 		}
 

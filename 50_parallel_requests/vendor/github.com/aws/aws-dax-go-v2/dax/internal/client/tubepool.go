@@ -18,8 +18,10 @@ package client
 import (
 	"context"
 	"crypto/tls"
+	"fmt"
 	"net"
 	"os"
+	"runtime/debug"
 	"sync"
 	"time"
 
@@ -120,6 +122,7 @@ func (p *tubePool) getWithContext(ctx context.Context, highPriority bool, opt Re
 		p.mutex.Lock()
 		if p.closed {
 			p.mutex.Unlock()
+			fmt.Println("[tubepool::getWithContext()] tubepool p is closed and mutex unlocked! Debug stack:", string(debug.Stack()))
 			return nil, os.ErrClosed
 		}
 
@@ -145,9 +148,11 @@ func (p *tubePool) getWithContext(ctx context.Context, highPriority bool, opt Re
 
 		var done chan tube
 		if p.gate.tryEnter() {
+			fmt.Println("[tubepool::getWithContext] p.gate.tryEnter")
 			go p.allocAndReleaseGate(session, done, true, opt)
 		} else if highPriority {
 			done = make(chan tube)
+			fmt.Println("[tubepool::getWithContext] highPriority")
 			go p.allocAndReleaseGate(session, done, false, opt)
 		}
 
@@ -167,6 +172,7 @@ func (p *tubePool) getWithContext(ctx context.Context, highPriority bool, opt Re
 				p.debugLog(opt, "TubePool for %s returned error : %s", p.address, err)
 				return nil, err
 			}
+			fmt.Println("[tubepool::getWithContext] ErrClosed")
 			return nil, os.ErrClosed
 		case <-ctx.Done():
 			p.debugLog(opt, "Context.Done is closed in Pool %s. Error : %s", p.address, ctx.Err())
@@ -180,6 +186,7 @@ func (p *tubePool) getWithContext(ctx context.Context, highPriority bool, opt Re
 func (p *tubePool) allocAndReleaseGate(session int64, done chan tube, releaseGate bool, opt RequestOptions) {
 	tube, err := p.alloc(session, opt)
 	if releaseGate {
+		fmt.Println("[tubepool::allocAndReleaseGate] releaseGate")
 		p.gate.exit()
 	}
 	if err == nil {
@@ -216,6 +223,8 @@ func (p *tubePool) put(t tube) {
 	defer p.mutex.Unlock()
 
 	if p.closed || t.Session() != p.session {
+		fmt.Println("[tubepool::put] Tube will be closed if the pool is closed or its coming from a different session.p.closed |t.Session() != p.session |  Debug stack:",
+			p.closed, t.Session() != p.session, string(debug.Stack()))
 		t.Close()
 		// Waiters channel was already closed in Close
 		return
@@ -243,9 +252,11 @@ func (p *tubePool) closeTube(t tube) {
 		return
 	}
 	if p.closeTubeImmediately {
+		fmt.Println("[tubepool::closeTube] closeTubeImmediately")
 		t.Close()
 	} else {
 		go func() {
+			fmt.Println("[tubepool::closeTube] Make sure to close the tube if you are not sure that the tube is clean")
 			t.Close()
 		}()
 	}
@@ -271,6 +282,7 @@ func (p *tubePool) Close() error {
 
 	var head tube
 	if !p.closed {
+		fmt.Println("[tubepool::Close()] Closes the pool and all idle tubes in it.Debug stack:", string(debug.Stack()))
 		p.closed = true
 		p.sessionBump()
 		head = p.clearIdleConnections()

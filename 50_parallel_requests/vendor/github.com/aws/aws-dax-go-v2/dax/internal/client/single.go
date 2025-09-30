@@ -19,6 +19,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/aws/aws-dax-go-v2/dax/internal/cbor"
@@ -155,6 +156,7 @@ func newSingleClientWithOptions(endpoint string, connConfigData connConfig, regi
 }
 
 func (client *SingleDaxClient) Close() error {
+	fmt.Println("[SingleDaxClient::Close()] Debug stack:" /*string(debug.Stack())*/)
 	client.executor.stopAll()
 	if client.pool != nil {
 		return client.pool.Close()
@@ -163,7 +165,8 @@ func (client *SingleDaxClient) Close() error {
 }
 
 func (client *SingleDaxClient) startHealthChecks(cc *cluster, host hostPort) {
-	cc.debugLog("Starting health checks for :: " + host.host)
+	//cc.debugLog("Starting health checks for :: " + host.host)
+	fmt.Println("[single::startHealthChecks] Starting health checks for :: " + host.host + "Debug stack:" /*string(debug.Stack())*/)
 	client.executor.start(cc.config.ClientHealthCheckInterval, func() error {
 		ctx, cfn := context.WithTimeout(context.Background(), 1*time.Second)
 		defer cfn()
@@ -452,7 +455,7 @@ func (client *SingleDaxClient) executeWithRetries(ctx context.Context, op string
 		if i > 0 && o.Logger != nil && o.LogLevel.Matches(utils.LogDebugWithRequestRetries) {
 			o.Logger.Logf(logging.Debug, "Retrying Request %s/%s, attempt %d", service, op, i)
 		}
-
+		fmt.Println("[single::executeWithRetries] executeWithContext. Debug stack:" /*string(debug.Stack())*/)
 		err = client.executeWithContext(ctx, op, encoder, decoder, o)
 		if err == nil {
 			return nil
@@ -491,6 +494,7 @@ func (client *SingleDaxClient) executeWithContext(ctx context.Context, op string
 		}
 		// If we get error while setting deadline of tube
 		// probably something is wrong with the tube
+
 		client.pool.closeTube(t)
 		return err
 	}
