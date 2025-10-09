@@ -19,8 +19,8 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"fmt"
 	"time"
+	"fmt"
 
 	"github.com/aws/aws-dax-go-v2/dax/internal/cbor"
 	"github.com/aws/aws-dax-go-v2/dax/internal/lru"
@@ -550,7 +550,6 @@ func (client *SingleDaxClient) recycleTube(t tube, err error) {
 		return
 	}
 
-	fmt.Println("[recycleTube] ")
 	var recycle bool
 	if err == nil {
 		recycle = true
@@ -559,14 +558,13 @@ func (client *SingleDaxClient) recycleTube(t tube, err error) {
 		// IO streams are guaranteed to be completely drained only on daxRequestException
 		switch typedErr := err.(type) {
 		case *daxRequestFailure:
-		case *daxTransactionCanceledFailure:
-			fmt.Println("[recycleTube] switch case")
+		//case *daxTransactionCanceledFailure:
+			fmt.Println("[recycleTube] daxRequestFailure | daxTransactionCanceledFailure")
 			recycle = true
-			if recycle && typedErr.authError() {
+			if typedErr.authError() {
 				t.SetAuthExpiryUnix(time.Now().Unix())
 			}
 		default:
-			fmt.Println("[recycleTube] switch default")
 			return
 		}
 	}

@@ -1,4 +1,4 @@
-module IPv6_DualStack_Tests
+module PerfTest
 
 go 1.24.2
 

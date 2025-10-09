@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
+	"time"
 
 	"github.com/aws/aws-dax-go-v2/dax"
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -34,7 +36,10 @@ type Record struct {
 	test    string
 }
 
-func transactWriteItems(daxClient *dax.Dax) {
+// /
+// A condition in one of the condition expressions is not met => DynamoDB cancels a TransactWriteItems request
+// https://github.com/aws/aws-sdk-go-v2/blob/service/dynamodb/v1.26.8/service/dynamodb/types/errors.go#L891
+func transactWriteItemsFailure(daxClient *dax.Dax) {
 	fmt.Println("------------------transactWriteItems----------------------")
 	var records []Record = []Record{
 		{
@@ -98,13 +103,204 @@ func transactWriteItems(daxClient *dax.Dax) {
 	_, err = daxClient.TransactWriteItems(context.Background(), input)
 
 	var txErr *types.TransactionCanceledException
-	if errors.As(err, &txErr) {
-		for i, reason := range txErr.CancellationReasons {
-			fmt.Printf("Reason %d: Code=%s, Message=%s\n", i, aws.ToString(reason.Code), aws.ToString(reason.Message))
+	var rnfe *types.ResourceNotFoundException
+
+	if err != nil {
+
+		switch {
+		case errors.As(err, &txErr):
+			for i, reason := range txErr.CancellationReasons {
+				fmt.Printf("[transactWriteItemsFailure] Reason %d: Code=%s, Message=%s\n", i, aws.ToString(reason.Code), aws.ToString(reason.Message))
+			}
+		case errors.As(err, &rnfe):
+			fmt.Println("[transactWriteItemsFailure] Table not found:", rnfe.Error())
+		default:
+			fmt.Println("[transactWriteItemsFailure] Other error:", err.Error())
 		}
-	} else {
-		fmt.Printf("Unexpected error: %v\n", err)
+
 	}
+}
+
+// /
+// There is an ongoing TransactGetItems operation that conflicts with a concurrent PutItem, UpdateItem, DeleteItem or TransactWriteItems request.
+// In this case the TransactGetItems operation fails with a TransactionCanceledException.
+// https://github.com/aws/aws-sdk-go-v2/blob/service/dynamodb/v1.26.8/service/dynamodb/types/errors.go#L891
+func transactGetItemsFailure(daxClient *dax.Dax) {
+	fmt.Println("------------------transactGetItems----------------------")
+	var records []Record = []Record{
+		{
+			PK: 909090,
+			SK: 909090,
+			URLs: []string{
+				"https://example.com/first/link",
+				"https://example.com/second/url",
+			},
+		},
+		{
+			PK: 9090900,
+			SK: 9090900,
+			URLs: []string{
+				"https://example.com/first/link",
+				"https://example.com/second/url",
+			},
+		},
+	}
+
+	item0, err := attributevalue.MarshalMap(records[0])
+	if err != nil {
+		fmt.Printf("failed to marshal Record, %s", err)
+	}
+
+	item1, err := attributevalue.MarshalMap(records[1])
+	if err != nil {
+		fmt.Printf("failed to marshal Record, %s", err)
+	}
+
+	tgiInput := &dynamodb.TransactGetItemsInput{
+		TransactItems: []types.TransactGetItem{
+			{
+				Get: &types.Get{
+					TableName: aws.String(tableName),
+					Key: map[string]types.AttributeValue{
+						"pk": item0["pk"],
+						"sk": item0["sk"],
+					},
+				},
+			},
+			{
+				Get: &types.Get{
+					TableName: aws.String(tableName),
+					Key: map[string]types.AttributeValue{
+						"pk": item1["pk"],
+						"sk": item1["sk"],
+					},
+				},
+			},
+		},
+	}
+
+	twiInput := &dynamodb.TransactWriteItemsInput{
+		TransactItems: []types.TransactWriteItem{
+			{
+				Put: &types.Put{
+					TableName: aws.String(tableName),
+					Item:      item0,
+				},
+			},
+			{
+				Put: &types.Put{
+					TableName: aws.String(tableName),
+					Item:      item1,
+				},
+			},
+		},
+		ReturnConsumedCapacity: types.ReturnConsumedCapacityTotal,
+	}
+
+	twi2Input := &dynamodb.TransactWriteItemsInput{
+		TransactItems: []types.TransactWriteItem{
+			{
+				Delete: &types.Delete{
+					TableName: aws.String(tableName),
+					Key: map[string]types.AttributeValue{
+						"pk": item0["pk"],
+						"sk": item0["sk"],
+					},
+				},
+			},
+			{
+				Delete: &types.Delete{
+					TableName: aws.String(tableName),
+					Key: map[string]types.AttributeValue{
+						"pk": item1["pk"],
+						"sk": item1["sk"],
+					},
+				},
+			},
+		},
+		ReturnConsumedCapacity: types.ReturnConsumedCapacityTotal,
+	}
+
+	var wg sync.WaitGroup
+	wg.Add(3)
+	go func() {
+		defer wg.Done()
+
+		_, err = daxClient.TransactWriteItems(context.Background(), twiInput)
+
+		var txErr *types.TransactionCanceledException
+		var rnfe *types.ResourceNotFoundException
+
+		if err != nil {
+
+			switch {
+			case errors.As(err, &txErr):
+				for i, reason := range txErr.CancellationReasons {
+					fmt.Printf("[transactGetItemsFailure - TransactWriteItems] Reason %d: Code=%s, Message=%s\n", i, aws.ToString(reason.Code), aws.ToString(reason.Message))
+				}
+			case errors.As(err, &rnfe):
+				fmt.Println("[transactGetItemsFailure - TransactWriteItems] Table not found:", rnfe.Error())
+			default:
+				fmt.Println("[transactGetItemsFailure - TransactWriteItems] Other error:", err.Error())
+			}
+
+		}
+	}()
+
+	go func() {
+		defer wg.Done()
+
+		time.Sleep(10 * time.Microsecond)
+		ret, err := daxClient.TransactGetItems(context.Background(), tgiInput)
+
+		var txErr *types.TransactionCanceledException
+		var rnfe *types.ResourceNotFoundException
+
+		if err != nil {
+
+			switch {
+			case errors.As(err, &txErr):
+				for i, reason := range txErr.CancellationReasons {
+					fmt.Printf("[transactGetItemsFailure] Reason %d: Code=%s, Message=%s\n", i, aws.ToString(reason.Code), aws.ToString(reason.Message))
+				}
+			case errors.As(err, &rnfe):
+				fmt.Println("[transactGetItemsFailure] Table not found:", rnfe.Error())
+			default:
+				fmt.Println("[transactGetItemsFailure] Other error:", err.Error())
+			}
+
+		} else {
+			fmt.Println("TransactGetItems:", ret)
+		}
+	}()
+
+	go func() {
+		defer wg.Done()
+
+		time.Sleep(1 * time.Millisecond)
+
+		_, err = daxClient.TransactWriteItems(context.Background(), twi2Input)
+
+		var txErr *types.TransactionCanceledException
+		var rnfe *types.ResourceNotFoundException
+
+		if err != nil {
+
+			switch {
+			case errors.As(err, &txErr):
+				for i, reason := range txErr.CancellationReasons {
+					fmt.Printf("[transactGetItemsFailure - TransactWriteItems] Reason %d: Code=%s, Message=%s\n", i, aws.ToString(reason.Code), aws.ToString(reason.Message))
+				}
+			case errors.As(err, &rnfe):
+				fmt.Println("[transactGetItemsFailure - TransactWriteItems] Table not found:", rnfe.Error())
+			default:
+				fmt.Println("[transactGetItemsFailure - TransactWriteItems] Other error:", err.Error())
+			}
+
+		}
+	}()
+
+	wg.Wait()
 }
 
 func main() {
@@ -114,5 +310,6 @@ func main() {
 
 	defer daxClient3Nodes.Close()
 
-	transactWriteItems(daxClient3Nodes)
+	transactWriteItemsFailure(daxClient3Nodes)
+	transactGetItemsFailure(daxClient3Nodes)
 }

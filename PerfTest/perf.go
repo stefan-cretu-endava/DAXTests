@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/aws/aws-dax-go-v2/dax"
-	daxTypes "github.com/aws/aws-dax-go-v2/dax/types"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
@@ -30,7 +29,7 @@ var (
 
 // Predefined test configurations
 var (
-	operations        = []string{"getitem", "putitem", "query", "scan", "batchgetitem"}
+	operations        = []string{"transactWriteItems", "transactGetItems", "getitem", "putitem", "query", "scan", "batchgetitem"}
 	itemSizes         = []int{200, 2000}
 	concurrencyLevels = struct {
 		DAX []int
@@ -64,6 +63,8 @@ type DynamoClient interface {
 	Query(context.Context, *dynamodb.QueryInput, ...func(*dynamodb.Options)) (*dynamodb.QueryOutput, error)
 	Scan(context.Context, *dynamodb.ScanInput, ...func(*dynamodb.Options)) (*dynamodb.ScanOutput, error)
 	BatchGetItem(context.Context, *dynamodb.BatchGetItemInput, ...func(*dynamodb.Options)) (*dynamodb.BatchGetItemOutput, error)
+	TransactWriteItems(ctx context.Context, params *dynamodb.TransactWriteItemsInput, optFns ...func(*dynamodb.Options)) (*dynamodb.TransactWriteItemsOutput, error)
+	TransactGetItems(ctx context.Context, params *dynamodb.TransactGetItemsInput, optFns ...func(*dynamodb.Options)) (*dynamodb.TransactGetItemsOutput, error)
 }
 
 func randomString(length int) string {
@@ -155,7 +156,8 @@ func createTable(ctx context.Context, client *dynamodb.Client, operation string,
 	return newTableName, nil
 }
 
-func doRun(ctx context.Context, client DynamoClient, operation string, reqs []interface{}, concurrency int, duration time.Duration) (int64, int64, []float64) {
+func doRun(ctx context.Context, client DynamoClient, operation string, reqs []interface{},
+	concurrency int, duration time.Duration) (int64, int64, []float64) {
 	var totalResponse int64
 	var totalErrors int64
 	latencies := make([]float64, 0)
@@ -202,6 +204,55 @@ func doRun(ctx context.Context, client DynamoClient, operation string, reqs []in
 		case "batchgetitem":
 			req := reqs[reqIndex].(*dynamodb.BatchGetItemInput)
 			_, err = client.BatchGetItem(ctx, req)
+
+		case "transactWriteItems":
+			req := reqs[reqIndex].(*dynamodb.TransactWriteItemsInput)
+
+			newItem := map[string]types.AttributeValue{
+				"hk": &types.AttributeValueMemberS{
+					Value: fmt.Sprintf("hashkey-%d-%d", time.Now().UnixNano(), atomic.LoadInt64(&totalResponse)),
+				},
+				"rk": &types.AttributeValueMemberN{
+					Value: fmt.Sprintf("%d", rand.Int63()),
+				},
+				"avS": &types.AttributeValueMemberS{
+					Value: randomString(200),
+				},
+			}
+			newItem2 := map[string]types.AttributeValue{
+				"hk": &types.AttributeValueMemberS{
+					Value: fmt.Sprintf("hashkey-%d-%d", time.Now().UnixNano(), atomic.LoadInt64(&totalResponse)),
+				},
+				"rk": &types.AttributeValueMemberN{
+					Value: fmt.Sprintf("%d", rand.Int31()),
+				},
+				"avS": &types.AttributeValueMemberS{
+					Value: randomString(100),
+				},
+			}
+
+			// Wrap the item in a TransactWriteItem
+			transactItem := types.TransactWriteItem{
+				Put: &types.Put{
+					TableName: req.TransactItems[0].Put.TableName,
+					Item:      newItem,
+				},
+			}
+
+			transactItem2 := types.TransactWriteItem{
+				Put: &types.Put{
+					TableName: req.TransactItems[1].Put.TableName,
+					Item:      newItem2,
+				},
+			}
+
+			_, err = client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{
+				TransactItems: []types.TransactWriteItem{transactItem, transactItem2},
+			})
+
+		case "transactGetItems":
+			req := reqs[reqIndex].(*dynamodb.TransactGetItemsInput)
+			_, err = client.TransactGetItems(ctx, req)
 		}
 
 		latency := time.Since(start)
@@ -236,6 +287,7 @@ func prepareItems(ctx context.Context, client DynamoClient, tableName string, it
 	items := make([]interface{}, totalItems)
 
 	switch operation {
+
 	case "putitem":
 		for i := 0; i < totalItems; i++ {
 			item := randomItem(itemSize)
@@ -293,6 +345,72 @@ func prepareItems(ctx context.Context, client DynamoClient, tableName string, it
 						Keys: keys,
 					},
 				},
+			}
+			itemCount++
+		}
+		return items[:itemCount], nil
+
+	case "transactWriteItems":
+		itemCount := 0
+		// Prepare all TransactWriteItem entries
+		var transactItems []types.TransactWriteItem
+		for i := range totalItems {
+			item := randomItem(itemSize)
+			item["hk"] = &types.AttributeValueMemberS{Value: fmt.Sprintf("hashkey%d", i)}
+			item["rk"] = &types.AttributeValueMemberN{Value: fmt.Sprintf("%d", i)}
+
+			transactItems = append(transactItems, types.TransactWriteItem{
+				Put: &types.Put{
+					TableName: aws.String(tableName),
+					Item:      item,
+				},
+			})
+		}
+
+		// Chunk into groups of 100 and execute
+		for i := 0; i < len(transactItems); i += 20 {
+			nextChunkIdx := i + 20
+			if nextChunkIdx > len(transactItems) {
+				nextChunkIdx = len(transactItems)
+			}
+
+			chunk := transactItems[i:nextChunkIdx]
+			items[itemCount] = &dynamodb.TransactWriteItemsInput{
+				TransactItems: chunk,
+			}
+			itemCount++
+		}
+		return items[:itemCount], nil
+
+	case "transactGetItems":
+		itemCount := 0
+		// Prepare all TransactWriteItem entries
+		var transactItems []types.TransactGetItem
+
+		for i := range totalItems {
+			key := map[string]types.AttributeValue{
+				"hk": &types.AttributeValueMemberS{Value: fmt.Sprintf("hashkey%d", i)},
+				"rk": &types.AttributeValueMemberN{Value: fmt.Sprintf("%d", i)},
+			}
+
+			transactItems = append(transactItems, types.TransactGetItem{
+				Get: &types.Get{
+					TableName: aws.String(tableName),
+					Key:       key,
+				},
+			})
+		}
+
+		// Chunk into groups of 100 and execute
+		for i := 0; i < len(transactItems); i += 20 {
+			nextChunkIdx := i + 20
+			if nextChunkIdx > len(transactItems) {
+				nextChunkIdx = len(transactItems)
+			}
+
+			chunk := transactItems[i:nextChunkIdx]
+			items[itemCount] = &dynamodb.TransactGetItemsInput{
+				TransactItems: chunk,
 			}
 			itemCount++
 		}
@@ -463,7 +581,7 @@ func main() {
 		daxCfg.Region = *region
 		daxCfg.WriteRetries = 3
 		daxCfg.ReadRetries = 3
-		daxCfg.Config.IpDiscovery = daxTypes.IpDiscoveryIPv6
+		//daxCfg.Config.IpDiscovery = daxTypes.IpDiscoveryIPv6
 
 		daxClient, err := dax.New(daxCfg)
 		if err != nil {
