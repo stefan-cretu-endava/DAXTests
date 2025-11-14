@@ -16,13 +16,14 @@ import (
 
 const (
 	//port 8111
+	nonExistentCluster   string = "dax://non-existent-cluster.cykcls.dax-clusters.eu-west-1.amazonaws.com"
 	ipv4EUEndpointURL    string = "dax://csc-cluster.cykcls.dax-clusters.eu-west-1.amazonaws.com"
-	ipv4EndpointURL      string = "dax://csc-ipv4-ubuntu.6lzwui.alpha-dax-clusters.us-east-1.amazonaws.com" //3 nodes, r5.large
-	ipv6EndpointURL      string = "dax://csc-ipv6.6lzwui.alpha-dax-clusters.us-east-1.amazonaws.com"        //1 node, r5.large
-	dualStackEndpointURL string = "dax://csc-dualstack.6lzwui.alpha-dax-clusters.us-east-1.amazonaws.com"   //2 nodes, r5.large
+	ipv4EndpointURL      string = "dax://csc-ipv4.6lzwui.alpha-dax-clusters.us-east-1.amazonaws.com"      //3 nodes, r5.large
+	ipv6EndpointURL      string = "dax://csc-ipv6.6lzwui.alpha-dax-clusters.us-east-1.amazonaws.com"      //3 node, r5.large
+	dualStackEndpointURL string = "dax://csc-dualstack.6lzwui.alpha-dax-clusters.us-east-1.amazonaws.com" //3 nodes, r5.large
 	//TLS, port 9111
 	ipv4TLSEndpointURL      string = "daxs://csc-tls-ipv4.6lzwui.alpha-dax-clusters.us-east-1.amazonaws.com"      //3 node, r7i.24xlarge
-	dualStackTLSEndpointURL string = "daxs://csc-tls-dualstack.6lzwui.alpha-dax-clusters.us-east-1.amazonaws.com" //1 node, r7i.24xlarge
+	dualStackTLSEndpointURL string = "daxs://csc-tls-dualstack.6lzwui.alpha-dax-clusters.us-east-1.amazonaws.com" //3 node, r7i.24xlarge
 
 	tableName string = "CSC-DAX-Performance"
 	region    string = "us-east-1"
@@ -37,9 +38,13 @@ type Record struct {
 }
 
 // /
-// A condition in one of the condition expressions is not met => DynamoDB cancels a TransactWriteItems request
+// Perform PutItem to store 2 new items, then invoke TransactWriteItems with the same PutItem requests, having a condition
+// for a stored attrbute to not exist. When a condition in one of the condition expressions is not met => DynamoDB cancels
+// the TransactWriteItems request and issues daxTransactionCanceledFailure.
+// If the table name is worng or the table doesn't exist => DynamoDB cancels the TransactWriteItems request and issues daxRequestFailure.
+//
 // https://github.com/aws/aws-sdk-go-v2/blob/service/dynamodb/v1.26.8/service/dynamodb/types/errors.go#L891
-func transactWriteItemsFailure(daxClient *dax.Dax) {
+func transactWriteItemsFailure(daxClient *dax.Dax, tableName string) {
 	fmt.Println("------------------transactWriteItems----------------------")
 	var records []Record = []Record{
 		{
@@ -123,9 +128,10 @@ func transactWriteItemsFailure(daxClient *dax.Dax) {
 
 // /
 // There is an ongoing TransactGetItems operation that conflicts with a concurrent PutItem, UpdateItem, DeleteItem or TransactWriteItems request.
-// In this case the TransactGetItems operation fails with a TransactionCanceledException.
+// In this case the TransactGetItems operation fails with a TransactionCanceledException => dax geissuesnerates daxTransactionCanceledFailure,
+// but not always generated due to non-deterministic goroutines scheduling
 // https://github.com/aws/aws-sdk-go-v2/blob/service/dynamodb/v1.26.8/service/dynamodb/types/errors.go#L891
-func transactGetItemsFailure(daxClient *dax.Dax) {
+func transactGetItemsFailure(daxClient *dax.Dax, tableName string) {
 	fmt.Println("------------------transactGetItems----------------------")
 	var records []Record = []Record{
 		{
@@ -307,9 +313,13 @@ func main() {
 
 	awsConfigUSEast1 := getAwsConfig(region)
 	daxClient3Nodes, _ := getDaxClient(awsConfigUSEast1, ipv4EndpointURL)
-
 	defer daxClient3Nodes.Close()
 
-	transactWriteItemsFailure(daxClient3Nodes)
-	transactGetItemsFailure(daxClient3Nodes)
+	// Generate daxTransactionCanceledFailure, by attempting to perform TransactWriteItems, embedding multiple PutItems with conditions that fail
+	transactWriteItemsFailure(daxClient3Nodes, tableName)
+	// Generate daxTransactionCanceledFailure, by attempting to perform TransactGetItems concurrently with 2 TransactWriteItems => not always generated
+	transactGetItemsFailure(daxClient3Nodes, tableName)
+	// Generate daxRequestFailure, by attempting to perform TransactWriteItems and TransactGetItems on a non-existent-table
+	transactWriteItemsFailure(daxClient3Nodes, "NonExistentTable")
+	transactGetItemsFailure(daxClient3Nodes, "NonExistentTable")
 }
