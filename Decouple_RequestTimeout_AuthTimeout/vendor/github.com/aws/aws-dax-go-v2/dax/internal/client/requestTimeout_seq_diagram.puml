@@ -1,0 +1,29 @@
+@startuml requestTimeout_sequence_diagram
+
+participant Config
+participant DynamoDBAPI
+participant SingleDAXClient
+participant DAX
+participant User
+participant RequestOptions
+
+User -> DynamoDBAPI : {any_DB_Operation}()(context, dbOp_Input, optFns ...func(*dynamodb.Options)) (*dynamodb.{dbOp}Output, error)
+DynamoDBAPI -> DAX : request for config
+DynamoDBAPI <-- DAX : config 
+DynamoDBAPI -> Config : requestOptions(false, context, optFns..) (options, cfn, err)
+group requestOptions
+    alt context_hasDeadline && context.RequestTimeout > 0
+        Config -> Context : context.WithTimeout(context, c.RequestTimeout) 
+        Config <-- Context : (ctx, cfn)
+    end
+    Config -> RequestOptions : ctx
+end group
+alt err != nil 
+	DynamoDBAPI <-- Config : nil, err
+elseif cfn != nil
+    DynamoDBAPI -> Config : defer cfn()
+else    
+    DynamoDBAPI -> SingleDAXClient : {any_DB_Operation}WithOptions
+end
+
+@enduml

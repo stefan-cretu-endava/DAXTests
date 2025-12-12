@@ -1,0 +1,111 @@
+@startuml requests_sequence_diagram
+
+participant SingleDAXClient
+participant tubepool
+participant tube
+
+group #Orange control flow entries
+alt
+    SingleDAXClient -> SingleDAXClient : {any_DB_op}WithOptions(context, dbOp_input, dbOp_output, requestOptions)
+else
+    SingleDAXClient -> SingleDAXClient : defineKeySchema(context, table)
+else
+    SingleDAXClient -> SingleDAXClient : defineAttributeList(context, id)
+else
+    SingleDAXClient -> SingleDAXClient : defineAttributeListId(context, id)
+else
+    SingleDAXClient -> SingleDAXClient : endpoints(context, requestOptions)
+end 
+end group
+group #LightYellow
+SingleDAXClient -> SingleDAXClient : executeWithRetries(context, operation, requestOptions, encoderCallback, decoderCallback)  
+loop requestOptions.RetryMaxAttempts
+    SingleDAXClient -> SingleDAXClient : executeWithContext(context, operation, encoderCallback, decoderCallback, requestOptions)
+    group #LightGreen executeWithContext impl 
+        SingleDAXClient -> tubepool : getWithContext(context, highPrio bool, requestOptions) 
+        SingleDAXClient <-- tubepool : (tube, error)
+        alt error != nil
+            SingleDAXClient <-- SingleDAXClient : error
+        else {tubeppol retrieved successfully}
+            SingleDAXClient -> tubepool : SetDeadline(context, tube) {Add deadline to tube (underlying net.Conn), using the context deadline}
+            SingleDAXClient <-- tubepool : error
+            alt error != nil
+                alt error == context.Error() {error due to context cancelled or timeout}
+                    SingleDAXClient -> tubepool : put(tube) {return existing tube to tubepool}
+                    SingleDAXClient <-- SingleDAXClient : error
+                else {Close connection if error isn't related to context timeout}
+                    SingleDAXClient -> tubepool : closeTube(tube) 
+                    SingleDAXClient <-- SingleDAXClient : error
+                end
+            else {deadline added to tube}
+                SingleDAXClient -> SingleDAXClient : auth(context, tube) {writes auth data in tube}
+                SingleDAXClient <-- SingleDAXClient : error
+                alt error != nil {authentication error. Possibly, tube not drained completely}
+                    SingleDAXClient -> tubepool : closeTube(tube) 
+                    SingleDAXClient <-- SingleDAXClient : error
+                else {auth successful}
+                    SingleDAXClient -> tube : CborWriter() {get writer for data in the Concise Binary Object Representation => encode data types}
+                    SingleDAXClient <-- tube : writer
+                    SingleDAXClient -> SingleDAXClient : encoderCallback(writer)
+                    SingleDAXClient <-- SingleDAXClient : error
+                    alt error != nil {Close connection if encoderCallback returned error}
+                        SingleDAXClient -> tubepool : closeTube(tube) 
+                        SingleDAXClient <-- SingleDAXClient : error
+                    else {encoderCallback executed successfully}
+                        SingleDAXClient -> tube : writer.Flush() {clean tube}
+                        SingleDAXClient <-- tube : error
+                        alt error != nil
+                            SingleDAXClient -> tubepool : closeTube(tube) 
+                            SingleDAXClient <-- SingleDAXClient : error
+                        else {tube flushed successfully}
+                            SingleDAXClient -> tube : CborReader()  {get reader for data in the Concise Binary Object Representation}
+                            SingleDAXClient <-- tube : reader
+                            SingleDAXClient -> SingleDAXClient : decodeError(reader)
+                            SingleDAXClient <-- SingleDAXClient : (decodedErr, error)
+                            alt error != nil { error while decoding or network error => possibly tube not fully drained}
+                                SingleDAXClient -> tubepool : closeTube(tube) 
+                                SingleDAXClient <-- SingleDAXClient : error
+                            else
+                                alt decodedErr != nil {user or server error}
+                                    SingleDAXClient -> SingleDAXClient : recycleTube(tube, decodedErr) {tube restored to tubepool if decodedErr is nil or if it is daxRequestFailure. Tube closed otherwise}
+                                    group #LightBlue recycleTube
+                                    alt tube == nil
+                                        SingleDAXClient -> SingleDAXClient : return
+                                    else 
+                                        alt decodedErr == nil
+                                            SingleDAXClient -> tubepool : put(tube) {return existing tube to tubepool}
+                                        else
+                                            alt decodedErr == daxRequestFailure
+                                                SingleDAXClient -> tubepool : put(tube) {return existing tube to tubepool}
+                                                alt recycle && authError() {extend auth expiration time}
+                                                    SingleDAXClient -> tube : SetAuthExpiryUnix(time.Now().Unix()) 
+                                                end
+                                            else {decodedErr not daxRequestFailure}
+                                                SingleDAXClient -> tubepool : closeTube(tube) 
+                                            end
+                                        else {decodedErr not nil}
+                                            SingleDAXClient -> tubepool : closeTube(tube) 
+                                        end
+                                    end
+                                    end group
+                                    SingleDAXClient <-- SingleDAXClient : decodedErr
+                                    SingleDAXClient -> SingleDAXClient : decoderCallback(reader)
+                                    SingleDAXClient <-- SingleDAXClient : error
+                                    alt error != nil {close connection as there was error while decoding data in tube => not completely drained}
+                                        SingleDAXClient -> tubepool : closeTube(tube) 
+                                        SingleDAXClient <-- SingleDAXClient : error
+                                    else
+                                        SingleDAXClient -> tubepool : put(tube) {return existing tube to tubepool}
+                                    end
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end group
+end loop
+end group
+
+@enduml

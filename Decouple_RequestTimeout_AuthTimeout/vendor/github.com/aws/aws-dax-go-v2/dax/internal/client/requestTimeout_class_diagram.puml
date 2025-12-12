@@ -1,0 +1,20 @@
+@startuml requestTimeout_class_diagram
+
+struct Config {
+    +client.Config
+
+	// Default request options
+	+RequestTimeout time.Duration
+	+WriteRetries   int
+	+ReadRetries    int
+	+RetryDelay     time.Duration
+
+	+Logger   logging.Logger
+	+LogLevel utils.LogLevelType
+
+    -requestOptions(read, context, optFns ...func(*dynamodb.Options)) (client.RequestOptions, context.CancelFunc, error)
+    -mergeFrom(awsConfig, endpoint)
+}
+
+
+@enduml
