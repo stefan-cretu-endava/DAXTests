@@ -31,6 +31,7 @@ func getDaxClientWithRequesTimeout(cfg *aws.Config, endpoint string, requestTime
 	daxCfg.Config.ClientHealthCheckInterval = time.Second * 5
 	daxCfg.Config.ClusterUpdateInterval = time.Second * 5
 	daxCfg.Config.MaxPendingConnectionsPerHost = 10 // or lower if nodes are under pressure
+	daxCfg.Config.ConnectionExtendedDrainingTime = 97 * time.Millisecond
 
 	daxCfg.Config.DialContext = (&net.Dialer{
 		Timeout:   time.Millisecond * time.Duration(5000),
@@ -71,6 +72,8 @@ func getSecureDAXClientForTLSWithRequestTimeout(cfg *aws.Config, endpoint string
 	secureCfg.Config.ClusterUpdateInterval = time.Second * 10
 
 	secureCfg.Config.MaxPendingConnectionsPerHost = 20
+
+	secureCfg.Config.ConnectionExtendedDrainingTime = 105 * time.Millisecond
 
 	secureCfg.DialContext = func(ctx context.Context, network string, address string) (net.Conn, error) {
 		// fmt.Println("Write your custom logic here")

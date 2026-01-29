@@ -100,8 +100,8 @@ func PutRecordItem(daxClient *dax.Dax, inputRecord Record) {
 			fmt.Println("[PutRecordItem] Debug stack:", string(debug.Stack()))
 		}
 
-	} else if serverReply != nil {
-		fmt.Println("[PutRecordItem] Succeeded! Server reply: ", serverReply)
+	} else {
+		fmt.Println("[PutRecordItem] Server reply: ", serverReply)
 	}
 }
 
@@ -228,20 +228,45 @@ func TransactWriteRecordItem(daxClient *dax.Dax, records []Record) {
 func main() {
 	userRequestTimeout := flag.Float64("requestTimeout", 60000, "Value in milliseconds for requestTimeout")
 	useTransactWrite := flag.Bool("useTransactWrite", false, "Use TransactWriteCancel")
+	useTls := flag.Bool("useTls", false, "Use tls connection for the DAX client")
 	flag.Parse()
 
 	var requestTimeoutSeconds = time.Duration(*userRequestTimeout) * time.Millisecond
-	fmt.Println("Creating DAX client with request timeout:", requestTimeoutSeconds.String())
-
 	awsConfigUSEast1 := getAwsConfig(region)
-	daxClient3Nodes, _ := getDaxClientWithRequesTimeout(awsConfigUSEast1, ipv4EndpointURL, requestTimeoutSeconds)
-	defer daxClient3Nodes.Close()
+	if !*useTls {
+		fmt.Println("Creating DAX client with request timeout:", requestTimeoutSeconds.String())
 
-	if *useTransactWrite {
-		TransactWriteRecordItem(daxClient3Nodes, records)
+		daxClient3Nodes, err := getDaxClientWithRequesTimeout(awsConfigUSEast1, ipv4EndpointURL, requestTimeoutSeconds)
+
+		if err != nil {
+			fmt.Println("Coudln't created DAX client. The app will exit!:", err.Error())
+			return
+		}
+		defer daxClient3Nodes.Close()
+
+		if *useTransactWrite {
+			TransactWriteRecordItem(daxClient3Nodes, records)
+		} else {
+			//DeleteRecordItem(daxClient3Nodes, records[0])
+			PutRecordItem(daxClient3Nodes, records[0])
+		}
+		// UpdateRecordItem(daxClient3Nodes, records[0])
 	} else {
-		DeleteRecordItem(daxClient3Nodes, records[0])
-		PutRecordItem(daxClient3Nodes, records[0])
+		fmt.Println("Creating secure DAX client, using TLS connection, with request timeout:", requestTimeoutSeconds.String())
+		tlsDaxClient3Nodes, err := getSecureDAXClientForTLSWithRequestTimeout(awsConfigUSEast1, ipv4TLSEndpointURL, requestTimeoutSeconds)
+
+		if err != nil {
+			fmt.Println("Coudln't created secure (TLS) DAX client. The app will exit!:", err.Error())
+			return
+		}
+
+		defer tlsDaxClient3Nodes.Close()
+
+		if *useTransactWrite {
+			TransactWriteRecordItem(tlsDaxClient3Nodes, records)
+		} else {
+			PutRecordItem(tlsDaxClient3Nodes, records[0])
+		}
+
 	}
-	// UpdateRecordItem(daxClient3Nodes, records[0])
 }
