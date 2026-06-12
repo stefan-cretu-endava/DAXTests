@@ -1,0 +1,118 @@
+{
+  "Table": "CSC-DAX-Performance",
+  "ClientConfigs": {
+    "Default": {
+      "ConnectionTimeout": 5000,
+      "RequestTimeout": 60000,
+      "ReadRetries": 2,
+      "WriteRetries": 2,
+      "MaxConcurrency": 1000,
+      "MaxPendingConnections": 10
+    },
+    "Aggressive": {
+      "ConnectionTimeout": 1000,
+      "RequestTimeout": 100,
+      "ReadRetries": 3,
+      "WriteRetries": 3,
+      "MaxConcurrency": 1000,
+      "MaxPendingConnections": 10
+    }
+  },
+  "TrafficConfigs": {
+    "100%": {
+      "ItemSizes": {
+        "GetItem": 1024,
+        "BatchGetItem": 19456,
+        "Query": 200
+      },
+      "NumberOfAttributes": 6,
+      "APIs": ["GetItem", "BatchGetItem", "Query", "PutItem", "BatchWriteItem", "UpdateItem"],
+      "CacheHitPercentage": 100
+    },
+    "50%": {
+      "ItemSizes": {
+        "GetItem": 1024,
+        "BatchGetItem": 19456,
+        "Query": 200
+      },
+      "NumberOfAttributes": 6,
+      "APIs": ["GetItem", "BatchGetItem", "Query", "PutItem", "BatchWriteItem", "UpdateItem"],
+      "CacheHitPercentage": 50
+    },
+    "N/A": {
+      "ItemSizes": {
+        "PutItem": 1024,
+        "BatchWriteItem": 19456,
+        "UpdateItem": 1024
+      },
+      "NumberOfAttributes": 6,
+      "APIs": ["PutItem", "BatchWriteItem", "UpdateItem"],
+      "CacheHitPercentage": 0
+    }
+  },
+  "TestConfigs": {
+    "CacheHitDefault": {
+      "Name": "Cache Hit (Default Client Config)",
+      "Description": "Gradual TPS increase till server side CPU reaches 90%",
+      "ClientConfig": "Default",
+      "Reboot": 0,
+      "TrafficConfig": "100%"
+    },
+    "CacheHitAggressive": {
+      "Name": "Cache Hit (Aggressive Client Config)",
+      "Description": "Gradual TPS increase till server side CPU reaches 90%",
+      "ClientConfig": "Aggressive",
+      "Reboot": 0,
+      "TrafficConfig": "100%"
+    },
+    "CacheHitDefaultWithReboot": {
+      "Name": "Cache Hit (Default Client Config)",
+      "Description": "Gradual TPS increase till server side CPU reaches 90%; With a node reboot every 10 minutes",
+      "ClientConfig": "Default",
+      "Reboot": 600000,
+      "TrafficConfig": "100%"
+    },
+    "CacheMissDefault": {
+      "Name": "Cache Miss (Default Client Config)",
+      "Description": "Gradual TPS increase till server side CPU reaches 90%",
+      "ClientConfig": "Default",
+      "Reboot": 0,
+      "TrafficConfig": "50%"
+    },
+    "CacheMissAggressive": {
+      "Name": "Cache Miss (Aggressive Client Config)",
+      "Description": "Gradual TPS increase till server side CPU reaches 90%",
+      "ClientConfig": "Aggressive",
+      "Reboot": 0,
+      "TrafficConfig": "50%"
+    },
+    "CacheMisAggressiveWithReboot": {
+      "Name": "Cache Miss (Default Client Config)",
+      "Description": "Gradual TPS increase till server side CPU reaches 90%; With a node reboot every 10 minutes",
+      "ClientConfig": "Aggressive",
+      "Reboot": 600000,
+      "TrafficConfig": "50%"
+    },
+    "WriteDefault": {
+      "Name": "Write (Default Client Config)",
+      "Description": "Gradual TPS increase till server side CPU reaches 90%",
+      "ClientConfig": "Default",
+      "Reboot": 0,
+      "TrafficConfig": "N/A"
+    },
+    "WriteAggressive": {
+      "Name": "Write (Aggressive Client Config)",
+      "Description": "Gradual TPS increase till server side CPU reaches 90%",
+      "ClientConfig": "Aggressive",
+      "Reboot": 0,
+      "TrafficConfig": "N/A"
+    },
+    "WriteAggressiveWithReboot": {
+      "Name": "Write (Default Client Config)",
+      "Description": "Gradual TPS increase till server side CPU reaches 90%; With a node reboot every 10 minutes",
+      "ClientConfig": "Aggressive",
+      "Reboot": 600000,
+      "TrafficConfig": "N/A"
+    }
+  }
+}
