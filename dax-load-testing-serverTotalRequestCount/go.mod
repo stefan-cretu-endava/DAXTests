@@ -2,7 +2,7 @@ module dax-performance-main
 
 go 1.24.0
 
-//replace github.com/aws/aws-dax-go-v2 => ../../../DAXGo/DaxGoV2Client
+//replace github.com/aws/aws-dax-go-v2 => ../../DAXGo/DaxGoV2Client
 
 require (
 	github.com/aws/aws-dax-go-v2 v1.0.0

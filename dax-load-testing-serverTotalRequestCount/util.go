@@ -25,6 +25,11 @@ var (
 	batchWriteSKManager = newUintManager(0, numSKs)
 )
 
+//const avgPerMinuteTotalRequestCount = 1_040_000
+
+var reqCount uint64
+var prevAvgLoad float64
+
 type uintManager struct {
 	mn  uint64
 	mx  uint64
@@ -94,5 +99,5 @@ func lessThanOrEqualFloat64(a, b float64) bool {
 	if math.Abs(a-b) < epsilon {
 		return true // a is less than or equal to b if they are effectively equal
 	}
-	return a < b
+	return a <= b
 }

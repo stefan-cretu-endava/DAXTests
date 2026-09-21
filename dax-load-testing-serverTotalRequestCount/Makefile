@@ -1,13 +1,13 @@
 BUILD_DIR := ./build
 EC2_KEY := ~/CSCipv6.pem
 
-EC2_IP1 :=100.26.207.158
+EC2_IP1 := 54.242.68.45
 EC2_IP2 :=3.87.117.165
 EC2_PATH :=/home/ubuntu/TestApps/
-EC2_ADDR1 :=ubuntu@ec2-100-26-207-158.compute-1.amazonaws.com
+EC2_ADDR1 :=ubuntu@ec2-54-242-68-45.compute-1.amazonaws.com
 EC2_ADDR2 :=ubuntu@ec2-3-87-117-165.compute-1.amazonaws.com
-EXE_BASELINE := loadTest_baseline_ipv4_3nodes_TRC
-EXE_CHANGES := loadTest_decoupleRT_changes_ipv4_3nodes
+EXE_BASELINE := loadTest_baseline_ipv4_TRC_DT100_ReadWriteDefaultRT
+EXE_CHANGES := loadTest_changes_ipv4_TRC_DT100_ReadWriteDefaultRT
 EXE_NAME := ${EXE_BASELINE}
 
 .PHONY: all clean build deploy run stop
@@ -65,7 +65,7 @@ deployIpv4: buildipv4
 	scp -i $(EC2_KEY) ./build/$(EXE_NAME) $(EC2_ADDR1):$(EC2_PATH)
 	# rsync -avz -e "ssh -i $(EC2_KEY)" ./build/* ec2-user@$(EC2_IP2):$(EC2_PATH)
 	# ssh -i $(EC2_KEY) ec2-user@$(EC2_IP2) "chmod 755 $(EC2_PATH)/*"
-	scp -i $(EC2_KEY) ./build/$(EXE_NAME) $(EC2_ADDR2):$(EC2_PATH)
+	#scp -i $(EC2_KEY) ./build/$(EXE_NAME) $(EC2_ADDR2):$(EC2_PATH)
 
 deployIpv4TLS: buildipv4TLS
 	# rsync -avz -e "ssh -i $(EC2_KEY)" ./build/* ec2-user@$(EC2_IP1):$(EC2_PATH)

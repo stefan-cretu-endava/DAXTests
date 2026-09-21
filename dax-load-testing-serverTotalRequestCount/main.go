@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"log"
 	"os/signal"
+	"runtime"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -13,6 +15,10 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/cloudwatch"
 	"github.com/aws/aws-sdk-go-v2/service/cloudwatch/types"
 )
+
+func getGOMAXPROCS() int {
+	return runtime.GOMAXPROCS(0)
+}
 
 func main() {
 	flags := getFlags()
@@ -27,23 +33,32 @@ func main() {
 	cw := getCloudwatch(awsCfg)
 	daxSvc := getDaxSvc(awsCfg)
 
-	fmt.Printf("New cluster with name:%s available at:%s Table:%s CW namespace:%s", flags.clusterName, flags.clusterEndpoint, appConfig.Table, flags.testNamespace)
+	fmt.Printf("Connected to cluster with name:%s\n in region:%s\n available at:%s\n having #nodes:%d\n using table:%s\n and logging metrics to CW namespace:%s\n test name:%s\n GOMAXPROCS is %d\n",
+		flags.clusterName,
+		awsCfg.Region,
+		flags.clusterEndpoint,
+		flags.nodes,
+		appConfig.Table,
+		flags.testNamespace,
+		appConfig.TestConfig.Name,
+		getGOMAXPROCS())
 
-	daxClient, err := getDaxClient(awsCfg, flags.clusterEndpoint, appConfig)
+	daxClient, err := getDaxClient(awsCfg, flags, appConfig)
 	if err != nil {
 		panic(err)
 	}
 
-	if !isWriteOp(flags.op) {
-		if flags.op == "read" || flags.op == "Read" {
-			loadDataForRead(sigCtx, daxClient, appConfig.Table, appConfig.TrafficConfig.ItemSizes["GetItem"])
-			loadDataForRead(sigCtx, daxClient, appConfig.Table, appConfig.TrafficConfig.ItemSizes["Query"])
-			loadDataForRead(sigCtx, daxClient, appConfig.Table, appConfig.TrafficConfig.ItemSizes["BatchGetItem"])
-		} else {
-			fmt.Println("Load data for operation:", flags.op)
-			loadDataForRead(sigCtx, daxClient, appConfig.Table, appConfig.TrafficConfig.ItemSizes[flags.op])
-		}
-	}
+	/*
+		if !isWriteOp(flags.op) {
+			if flags.op == "read" || flags.op == "Read" {
+				loadDataForRead(sigCtx, daxClient, appConfig.Table, appConfig.TrafficConfig.ItemSizes["GetItem"])
+				loadDataForRead(sigCtx, daxClient, appConfig.Table, appConfig.TrafficConfig.ItemSizes["Query"])
+				loadDataForRead(sigCtx, daxClient, appConfig.Table, appConfig.TrafficConfig.ItemSizes["BatchGetItem"])
+			} else {
+				fmt.Println("Load data for operation:", flags.op)
+				loadDataForRead(sigCtx, daxClient, appConfig.Table, appConfig.TrafficConfig.ItemSizes[flags.op])
+			}
+		}*/
 
 	go func() {
 		<-time.After(time.Duration(flags.testDurationMinutes) * time.Minute)
@@ -73,7 +88,8 @@ func main() {
 		}()
 	}
 
-	run(sigCtx, cw, metricChan, daxClient, appConfig, flags)
+	run(sigCtx, metricChan, daxClient, appConfig, flags)
+	daxClient.Close()
 }
 
 func collectMetricWorker(ctx context.Context, cw *cloudwatch.Client, metricChan chan types.MetricDatum, f *flags) {
@@ -156,70 +172,156 @@ func runMetricCollector(ctx context.Context, cw *cloudwatch.Client, metricChan c
 	}
 }
 
-// func chooseWorkerFunc(f *flags) workerFn {
-// 	var worker workerFn
-// 	r := NewRandom[int](100, 0)
-// 	rnd := r.Next()
-
-// 	if f.op == "write" {
-// 		if rnd < 75 {
-// 			worker = workerPutItem
-// 		} else if rnd < 90 {
-// 			worker = workerUpdateItem
-// 		} else {
-// 			worker = workerBatchWriteItem
-// 		}
-// 	} else {
-// 		if rnd < 75 {
-// 			worker = workerGetItem
-// 		} else if rnd < 90 {
-// 			worker = workerQuery
-// 		} else {
-// 			worker = workerBatchGetItem
-// 		}
-// 	}
-
-// 	return worker
-// }
-
-func run(ctx context.Context, cw *cloudwatch.Client, metricChan chan types.MetricDatum, client *dax.Dax, appConfig *AppConfig, f *flags) {
+func run(ctx context.Context, metricChan chan types.MetricDatum, client *dax.Dax, appConfig *AppConfig, f *flags) {
+	// Each launched worker has a dedicated context with a cancel function kept in the list below, such that it can be cancelled on demand
 	var cancelFuncs []context.CancelFunc
-	ticker := time.NewTicker(time.Minute)
+	// Used to measure the request count every minute time interval
+	ticker := time.NewTicker(10 * time.Second)
+	// Workers use this chan to send true if the request returned an error containing ThrottlingException
 	throttleChan := make(chan bool)
+	// A factor which helps in mitigating throttling, being increased in such cases, thus artifically increase the request count by it
 	loadBias := 1.0
 
+	// Record the request count in the previous minute time interval
+	var lastReqCount uint64
+	// Average load per minute
+	var avgLoadPerMinute float64
 	tableName := appConfig.Table
 
-	maxIncrease := 8
-	if isWriteOp(f.op) {
-		maxIncrease = 2
+	var maxIncrease int = 4
+	var startingWorkersCount int = 16
+
+	var trafficFunc func(ctx context.Context)
+	var workerObj Worker = Worker{
+		metricChan:          metricChan,
+		client:              client,
+		tableName:           tableName,
+		appConfig:           appConfig,
+		throttleChan:        throttleChan,
+		opsCntr:             nil,
+		targetAvgLoadPerMin: 1_040_000,
 	}
 
-	var worker workerFn
 	switch f.op {
 	case "GetItem":
-		worker = workerGetItem
+		maxIncrease = 4
+		startingWorkersCount = 16
+		fmt.Println("Starting GetItem test targetting avg load/min:", workerObj.targetAvgLoadPerMin)
+		trafficFunc = workerObj.GetItemTraffic
+
 	case "BatchGetItem":
-		worker = workerBatchGetItem
+		maxIncrease = 4
+		startingWorkersCount = 4
+		fmt.Println("Starting BatchGetItem test targetting avg load/min:", workerObj.targetAvgLoadPerMin)
+		trafficFunc = workerObj.BatchGetItemTraffic
+
 	case "Query":
-		worker = workerQuery
+		maxIncrease = 4
+		startingWorkersCount = 4
+		workerObj.targetAvgLoadPerMin = 450_000
+		fmt.Println("Starting Query test targetting avg load/min:", workerObj.targetAvgLoadPerMin)
+		trafficFunc = workerObj.QueryTraffic
+
 	case "PutItem":
-		worker = workerPutItem
+		maxIncrease = 4
+		startingWorkersCount = 4
+		workerObj.targetAvgLoadPerMin = 300_000
+		if f.requestTimeoutMillis <= 150 {
+			maxIncrease = 1
+			startingWorkersCount = 2
+			workerObj.targetAvgLoadPerMin = 80_000
+		}
+		fmt.Println("Starting PutItem test targetting avg load/min:", workerObj.targetAvgLoadPerMin, "maxIncrease", maxIncrease, "startingWorkersCount", startingWorkersCount)
+		trafficFunc = workerObj.PutItemTraffic
+
 	case "UpdateItem":
-		worker = workerUpdateItem
+		maxIncrease = 4
+		startingWorkersCount = 4
+		workerObj.targetAvgLoadPerMin = 300_000
+		if f.requestTimeoutMillis <= 150 {
+			maxIncrease = 1
+			startingWorkersCount = 2
+			workerObj.targetAvgLoadPerMin = 100_000
+		}
+		fmt.Println("Starting UpdateItem test targeting avg load/min:", workerObj.targetAvgLoadPerMin, "maxIncrease", maxIncrease, "startingWorkersCount", startingWorkersCount)
+		trafficFunc = workerObj.UpdateItemTraffic
+
 	case "BatchWriteItem":
-		worker = workerBatchWriteItem
+		maxIncrease = 2
+		startingWorkersCount = 2
+		workerObj.targetAvgLoadPerMin = 300_000
+		if f.requestTimeoutMillis <= 150 {
+			maxIncrease = 1
+			startingWorkersCount = 1
+			workerObj.targetAvgLoadPerMin = 30_000
+		}
+		fmt.Println("Starting BatchWriteItem test targeting avg load/min:", workerObj.targetAvgLoadPerMin, "maxIncrease", maxIncrease, "startingWorkersCount", startingWorkersCount)
+		trafficFunc = workerObj.BatchWriteItemTraffic
+
 	case "read", "Read":
-		worker = workerRead
+		maxIncrease = 4
+		startingWorkersCount = 4
+		// workerObj.opsCntr = &OperationsCounter{
+		// 	getItemPercentage:      50,
+		// 	batchGetItemPercentage: 50,
+		// 	queryPercentage:        0,
+		// }
+		// fmt.Println("Read operations percentages. GetItem:", workerObj.opsCntr.getItemPercentage, " BatchGetItem:", workerObj.opsCntr.batchGetItemPercentage, " Query:", workerObj.opsCntr.queryPercentage)
+		// workerObj.opsCntr.scaleToAvgLoadperMinute(workerObj.targetAvgLoadPerMin)
+		// fmt.Println("Scaled percentages to target avg load/min:", workerObj.targetAvgLoadPerMin, "GetItem:", workerObj.opsCntr.getItemPercentage, " BatchGetItem:", workerObj.opsCntr.batchGetItemPercentage, " Query:", workerObj.opsCntr.queryPercentage)
+		fmt.Println("Starting read test targetting avg load/min:", workerObj.targetAvgLoadPerMin, "maxIncrease", maxIncrease, "startingWorkersCount", startingWorkersCount)
+		trafficFunc = workerObj.ReadTraffic
+
+	case "write", "Write":
+		maxIncrease = 4
+		startingWorkersCount = 4
+		workerObj.targetAvgLoadPerMin = 300_000
+
+		if f.requestTimeoutMillis <= 150 {
+			maxIncrease = 1
+			startingWorkersCount = 2
+			workerObj.targetAvgLoadPerMin = 40_000
+		}
+		// workerObj.opsCntr = &OperationsCounter{
+		// 	putItemPercentage:        50,
+		// 	batchWriteItemPercentage: 50,
+		// 	updateItemPercentage:     0,
+		// }
+		// fmt.Println("Read operations percentages. GetItem:", workerObj.opsCntr.putItemPercentage, " BatchGetItem:", workerObj.opsCntr.batchWriteItemPercentage, " Query:", workerObj.opsCntr.updateItemPercentage)
+		// workerObj.opsCntr.scaleToAvgLoadperMinute(workerObj.targetAvgLoadPerMin)
+		// fmt.Println("Scaled percentages to target avg load/min:", workerObj.targetAvgLoadPerMin, "GetItem:", workerObj.opsCntr.putItemPercentage, " BatchGetItem:", workerObj.opsCntr.batchWriteItemPercentage, " Query:", workerObj.opsCntr.updateItemPercentage)
+		fmt.Println("Starting write test targetting avg load/min:", workerObj.targetAvgLoadPerMin, "maxIncrease", maxIncrease, "startingWorkersCount", startingWorkersCount)
+		trafficFunc = workerObj.WriteTraffic
+
+	case "read-write", "Read-Write", "readwrite", "ReadWrite":
+		maxIncrease = 1
+		startingWorkersCount = 2
+		workerObj.targetAvgLoadPerMin = 300_000
+
+		if f.requestTimeoutMillis <= 150 {
+			workerObj.targetAvgLoadPerMin = 300_000
+		}
+		// workerObj.opsCntr = &OperationsCounter{
+		// 	getItemPercentage: 50,
+		// 	putItemPercentage: 50,
+		// }
+		// fmt.Println("Read operations percentages. GetItem:", workerObj.opsCntr.getItemPercentage, " PutItem:", workerObj.opsCntr.putItemPercentage)
+		// workerObj.opsCntr.scaleToAvgLoadperMinute(workerObj.targetAvgLoadPerMin)
+		// fmt.Println("Scaled percentages to target avg load/min:", workerObj.targetAvgLoadPerMin, "GetItem:", workerObj.opsCntr.getItemPercentage, " PutItem:", workerObj.opsCntr.putItemPercentage)
+		fmt.Println("Starting read-write test targetting avg load/min:", workerObj.targetAvgLoadPerMin)
+		trafficFunc = workerObj.ReadWriteTraffic
+
 	default:
-		worker = workerWrite
+		maxIncrease = 4
+		startingWorkersCount = 16
+		trafficFunc = workerObj.GetItemTraffic
 	}
 
-	for range 16 {
+	for range startingWorkersCount {
 		nCtx, nCancel := context.WithCancel(context.Background())
 		cancelFuncs = append(cancelFuncs, nCancel)
 
-		go worker(nCtx, metricChan, client, tableName, appConfig, throttleChan)
+		go trafficFunc(nCtx)
 	}
 
 	lastBiasChange := time.Now().Unix() - 3600
@@ -247,7 +349,17 @@ func run(ctx context.Context, cw *cloudwatch.Client, metricChan chan types.Metri
 			return
 
 		case <-ticker.C:
-			//
+			// reqCount is incremented with every made request during the entire testing time interval
+			currentReqCount := atomic.LoadUint64(&reqCount)
+			// For determining the request count made during the last interval, substract the old counter value,
+			// which contains the number of all requests made until the current time interval
+			reqCountDiff := currentReqCount - lastReqCount
+			lastReqCount = currentReqCount
+
+			avgLoadPer10Seconds := float64(reqCountDiff)
+			avgLoadPerMinute = 6 * avgLoadPer10Seconds
+
+			log.Printf("workers=%d goroutines=%d", len(cancelFuncs), runtime.NumGoroutine())
 		}
 
 		if time.Now().Unix()-lastBiasChange > 60 {
@@ -259,67 +371,54 @@ func run(ctx context.Context, cw *cloudwatch.Client, metricChan chan types.Metri
 			}
 		}
 
-		statAvg := getLastMinuteStats(cw, f.clusterName, types.StatisticAverage)
-		if statAvg == nil {
-			log.Println("Failed to get last minute stats")
-			continue
-		}
-		avgStatValue := *statAvg.Datapoints[0].Average
+		log.Printf("Average total request count per minute: %08f", avgLoadPerMinute)
 
-		statMax := getLastMinuteStats(cw, f.clusterName, types.StatisticMaximum)
-		if statMax == nil {
-			log.Println("Failed to get last minute stats")
-			continue
-		}
-		maxStatValue := *statMax.Datapoints[0].Maximum
-		log.Printf("Average total request count: %08f, Max total request count: %08f", avgStatValue, maxStatValue)
+		// Keep track of the target requests count, which can be artifically changed by loadBias factor  to alleviate throttling issues
+		targetAvgLoadPerMinute := float64(workerObj.targetAvgLoadPerMin)
+		avgLoadPerMinute = avgLoadPerMinute * loadBias
 
-		targetAvgTotalRequestCount := 1_000_000.0
-		avgStatValue = avgStatValue * loadBias
+		log.Printf("Average total request count per minute with load bias: %08f, %08f", avgLoadPerMinute, loadBias)
+
 		if loadBias > 1.0 {
-			targetAvgTotalRequestCount *= loadBias
-			log.Printf("Total request count | target requests count with loadBias: %08f | %08f", avgStatValue, targetAvgTotalRequestCount)
+			log.Printf("Total request count per minute | target requests count with loadBias: %08f | %08f", avgLoadPerMinute, targetAvgLoadPerMinute)
 		} else {
-			targetAvgTotalRequestCount = 1_000_000.0
+			targetAvgLoadPerMinute = float64(workerObj.targetAvgLoadPerMin)
 		}
 
 		cancelFuncsCount := len(cancelFuncs)
-		loadPerGoroutine := avgStatValue / float64(cancelFuncsCount)
+		if cancelFuncsCount == 0 {
+			continue
+		}
+		loadPerGoroutine := avgLoadPerMinute / float64(cancelFuncsCount)
 
-		if lessThanOrEqualFloat64(avgStatValue, targetAvgTotalRequestCount) {
-			log.Printf("Num goroutines: %d", len(cancelFuncs))
-			log.Printf("Average load per goroutine: %08f", loadPerGoroutine)
+		if lessThanOrEqualFloat64(avgLoadPerMinute, targetAvgLoadPerMinute) {
+			log.Printf("avgLoadPerMinute:%08f | cancelFuncsCount=Num goroutines: %d | Average load per goroutine: %08f", avgLoadPerMinute, len(cancelFuncs), loadPerGoroutine)
 
-			sAvg := int((targetAvgTotalRequestCount - avgStatValue) / loadPerGoroutine)
-			s := sAvg
-			if s == 0 {
-				s = 1
+			extraGoroutinesCount := int((targetAvgLoadPerMinute - avgLoadPerMinute) / loadPerGoroutine)
+
+			if extraGoroutinesCount > maxIncrease {
+				fmt.Println("Required increase of goroutines exceeds maxIncrease, limiting to:", extraGoroutinesCount, maxIncrease)
+				extraGoroutinesCount = maxIncrease
 			}
-			if s > maxIncrease {
-				s = maxIncrease
-			}
 
-			log.Printf("Will start %d goroutine(s)", s)
-			for range s {
+			log.Printf("Will start %d goroutine(s)", extraGoroutinesCount)
+			for range extraGoroutinesCount {
 				nCtx, nCancel := context.WithCancel(context.Background())
 				cancelFuncs = append(cancelFuncs, nCancel)
 
 				<-time.After(time.Millisecond)
-				go worker(nCtx, metricChan, client, tableName, appConfig, throttleChan)
+				go trafficFunc(nCtx)
 			}
 		} else {
 			if len(cancelFuncs) == 0 {
-				panic(fmt.Sprintf("Load with zero goroutines!, avg: %f, max: %f", avgStatValue, maxStatValue))
+				panic(fmt.Sprintf("Load with zero goroutines!, avg: %f", avgLoadPerMinute))
 			}
 
-			sAvg := int((avgStatValue - targetAvgTotalRequestCount) / loadPerGoroutine)
-			s := sAvg
-			if s == 0 {
-				s = int((avgStatValue - targetAvgTotalRequestCount) / loadPerGoroutine) //min(int(avgStatValue-targetAvgTotalRequestCount), int(maxStatValue-targetMaxTotalrequestCount))
-			}
+			sAvg := int((avgLoadPerMinute - targetAvgLoadPerMinute) / loadPerGoroutine)
+			stoppingGoroutinesCount := sAvg
 
-			log.Printf("Will stop %d goroutine(s)", s)
-			for range s {
+			log.Printf("Will stop %d goroutine(s)", stoppingGoroutinesCount)
+			for range stoppingGoroutinesCount {
 				if len(cancelFuncs) > 0 {
 					cancelFuncs[0]()
 					cancelFuncs = cancelFuncs[1:]

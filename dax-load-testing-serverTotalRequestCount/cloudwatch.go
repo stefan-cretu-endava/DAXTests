@@ -25,7 +25,7 @@ func getLastMinuteStats(cw *cloudwatch.Client, clusterName string, statistic typ
 	}
 
 	if len(stat.Datapoints) != 1 {
-		fmt.Printf("wrong length for datapoints: %d", len(stat.Datapoints))
+		fmt.Printf("wrong length for datapoints: %d\n", len(stat.Datapoints))
 		return nil
 	}
 

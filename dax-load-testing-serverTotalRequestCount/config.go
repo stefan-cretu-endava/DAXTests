@@ -74,7 +74,8 @@ func getAppConfig(f *flags) *AppConfig {
 	app.Table = cfg.Table
 
 	fmt.Println(app.TrafficConfig.APIs)
-	if !inArray(app.TrafficConfig.APIs, f.op) && (f.op != "Write" && f.op != "write" && f.op != "Read" && f.op != "read") {
+	if !inArray(app.TrafficConfig.APIs, f.op) &&
+		(f.op != "Write" && f.op != "write" && f.op != "Read" && f.op != "read" && f.op != "ReadWrite" && f.op != "readwrite" && f.op != "read-write") {
 		panic(fmt.Sprintf("unable to get op: %s", f.op))
 	}
 
